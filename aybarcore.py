@@ -257,18 +257,12 @@ class MemorySystem:
                     steps TEXT NOT NULL,
                     usage_count INTEGER DEFAULT 0,
                     last_used_turn INTEGER DEFAULT 0,
-                    data TEXT  -- Genel veri saklamak için (önceden varsa diye)
+                    data TEXT
                 )
                 """)
                 # Var olan procedural tablosuna yeni sütunları eklemek için (eğer yoksa)
                 # Bu kısım SQLite'ın ALTER TABLE kısıtlamaları nedeniyle biraz karmaşık olabilir,
                 # genellikle yeni tablo oluşturup veri taşımak daha güvenlidir ama basitlik için try-except ile deneyelim.
-                try:
-                    self.cursor.execute("ALTER TABLE procedural ADD COLUMN name TEXT UNIQUE")
-                except sqlite3.OperationalError: pass # Sütun zaten var veya başka bir hata
-                try:
-                    self.cursor.execute("ALTER TABLE procedural ADD COLUMN steps TEXT")
-                except sqlite3.OperationalError: pass
                 try:
                     self.cursor.execute("ALTER TABLE procedural ADD COLUMN usage_count INTEGER DEFAULT 0")
                 except sqlite3.OperationalError: pass
@@ -276,6 +270,12 @@ class MemorySystem:
                     self.cursor.execute("ALTER TABLE procedural ADD COLUMN last_used_turn INTEGER DEFAULT 0")
                 except sqlite3.OperationalError: pass
                 
+                # İndeksler: name için UNIQUE index CREATE TABLE içinde zaten tanımlı (TEXT UNIQUE NOT NULL)
+                # Bu nedenle burada tekrar CREATE UNIQUE INDEX yapmaya gerek yok, normal index yeterli olabilir
+                # veya mevcutsa ve sorun çıkarmıyorsa bırakılabilir. Task'e göre name için UNIQUE index isteniyor.
+                # CREATE TABLE içindeki UNIQUE kısıtlaması zaten bir B-tree indeksi oluşturur.
+                # Yine de, açıkça bir index oluşturmak sorgu optimizasyonuna yardımcı olabilir bazı durumlarda.
+                # Mevcut kodda normal INDEX var, onu koruyalım.
                 self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_procedural_name ON procedural (name)")
                 self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_procedural_usage_count ON procedural (usage_count)")
                 self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_procedural_last_used_turn ON procedural (last_used_turn)")
@@ -1597,9 +1597,65 @@ class EnhancedAybar:
         
         self.ask_llm = lru_cache(maxsize=self.config.LLM_CACHE_SIZE)(self._ask_llm_uncached)
         
-        self.ethical_framework = EthicalFramework(self) # Etik çerçeveyi başlat
+        self.ethical_framework = EthicalFramework(self)
 
         self._check_for_guardian_logs()
+
+    def _sanitize_llm_output(self, text: str) -> str:
+        """Metin içindeki kod bloklarını, yorumları ve diğer programlama artıklarını temizler."""
+        if not isinstance(text, str):
+            return ""
+
+        # 1. Çok satırlı kod blokları (```python ... ```, ```json ... ```, vb.)
+        # DOTALL, '.' karakterinin yeni satırları da eşleştirmesini sağlar.
+        # [\w\s]* kısmı, ```python gibi dil belirteçlerini yakalamak içindir.
+        text = re.sub(r"```[\w\s]*\n.*?\n```", "", text, flags=re.DOTALL)
+
+        # Bazen LLM'ler sadece ``` ile başlatıp bitirmeyebilir, bu yüzden daha genel bir temizlik
+        text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+
+        # 2. Satır başındaki yorumlar (#, //)
+        text = re.sub(r"^\s*#.*$", "", text, flags=re.MULTILINE)
+        text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
+
+        # 3. Fonksiyon ve sınıf tanımlamalarının başlangıç satırları
+        # \b kelime sınırı demektir, 'def'in 'default' gibi bir kelime içinde geçmemesini sağlar.
+        text = re.sub(r"^\s*def\s+\w+\s*\(.*?\)\s*:", "", text, flags=re.MULTILINE | re.IGNORECASE)
+        text = re.sub(r"^\s*class\s+\w+\s*(\(.*\))?\s*:", "", text, flags=re.MULTILINE | re.IGNORECASE)
+
+        # 4. Yaygın meta-yorumlar ve LLM fazlalıkları (daha fazlası eklenebilir)
+        meta_comments = [
+            "İşte istediğiniz metin:", "Elbette, buyurun:", "JSON cevabı aşağıdadır:",
+            "Aşağıdaki gibidir:", "İşte sonuç:", "İşte kod:",
+            "Ancak, bu konuda size yardımcı olabileceğim başka bir şey var mı?",
+            "Umarım bu yardımcı olur.", "Tabii, işte güncellenmiş kod:",
+            "Elbette, işte istediğiniz gibi düzenlenmiş kod:",
+            "Anladım.", "Tamamdır.", "Peki.", "Elbette.", "İşte istediğiniz gibi:",
+            "JSON formatında:", "Örnek:", "Açıklama:", "Not:", "Cevap:", "Soru:",
+            "Kullanıcının sorusu:", "Aybar'ın cevabı:", "İşte size bir örnek:",
+            "Aşağıda bulabilirsiniz:", "Bu kod parçacığı...", "Bu metin...",
+            "I hope this is helpful!", "Here is the code:", "Here is the text:",
+            "The code above...", "The text above...", "This will...", "This should...",
+            "Please find below...", "As requested:", "Sure, here you go:",
+            "Okay, I understand.", "Got it.", "Certainly.",
+            "The JSON response is as follows:", "For example:", "Explanation:", "Note that:"
+        ]
+        for comment in meta_comments:
+            # re.escape, yorum içindeki özel regex karakterlerini düzgün işlemesini sağlar.
+            text = re.sub(re.escape(comment), "", text, flags=re.IGNORECASE)
+            # Satır başında, muhtemel boşluk veya özel karakterlerle başlayanları da temizle
+            text = re.sub(r"^\s*[\W_]*" + re.escape(comment), "", text, flags=re.IGNORECASE | re.MULTILINE)
+
+        # 5. Sadece noktalama işaretleri veya çok kısa alfanümerik olmayan satırları temizle
+        text = re.sub(r"^\s*[\W_]{1,5}\s*$", "", text, flags=re.MULTILINE)
+
+        # 6. Yeni satırları normalleştir ve baştaki/sondaki boşlukları temizle
+        text = re.sub(r"\n\s*\n+", "\n", text) # Birden fazla yeni satırı (arada boşluk olsa bile) tek birine indir
+        text = text.strip()
+
+        return text
+
+        self.identity_prompt = self._load_identity()
         self.identity_prompt = self._load_identity()
         print(f"🧬 Aybar Kimliği Yüklendi: {self.identity_prompt[:70]}...")
         print("🚀 Geliştirilmiş Aybar Başlatıldı")
@@ -1635,36 +1691,46 @@ class EnhancedAybar:
             
         # Önce LLM çıktısını genel olarak sanitize et (istenmeyen meta yorumlar vb.)
         # Bu, JSON yapısını bozabilecek dışsal metinleri temizler.
-        potentially_dirty_json_text = self._sanitize_llm_output(response_text)
+        # ÖNEMLİ: Ham LLM çıktısını ilk olarak burada genel olarak sanitize ediyoruz.
+        sanitized_response_text = self._sanitize_llm_output(response_text)
+
+        # Adım 1: En dıştaki JSON array'ini bulmaya çalışalım.
+        # Bu, LLM'in başına veya sonuna eklediği fazladan metinleri ayıklamaya yardımcı olur.
+        array_match = re.search(r'\[\s*(\{.*?\}(?:,\s*\{.*?\})*\s*)\]', sanitized_response_text, re.DOTALL)
+        if array_match:
+            clean_json_str = array_match.group(0)
+            print(f"🔍 Olası JSON array bulundu: {clean_json_str[:100]}...")
+        else:
+            # Eğer array bulunamazsa, LLM tek bir JSON objesi döndürmüş olabilir veya format tamamen bozuk olabilir.
+            # Bu durumda, genel sanitize edilmiş metni olduğu gibi alıp şansımızı deneyeceğiz.
+            clean_json_str = sanitized_response_text.strip()
+            print(f"⚠️ JSON array regex ile bulunamadı. Ham sanitize edilmiş metin denenecek: {clean_json_str[:100]}...")
+
+        # Adım 2: String üzerinde yapısal JSON temizliği (trailing komutlar, eksik komutlar)
+        # Trailing virgülleri temizle (parantezlerden ve süslü parantezlerden önce)
+        clean_json_str = re.sub(r',\s*\]', ']', clean_json_str)
+        clean_json_str = re.sub(r',\s*\}', '}', clean_json_str)
+
+        # Basit eksik virgül ekleme: } { -> },{ (arada sadece boşluk varsa)
+        clean_json_str = re.sub(r'\}\s*\{', '},{', clean_json_str)
+
+        # String içi \n sorunlarını burada çözmek yerine ast.literal_eval'e güvenmek daha iyi.
+        # Tek tırnakları çift tırnağa çevirmek de json.loads için faydalı olabilir ama ast.literal_eval için sorun yaratabilir.
+        # Bu yüzden bu adımı atlıyoruz ve iki parser'ın da kendi güçlerini kullanmasına izin veriyoruz.
+        print(f"🔧 Ön-işleme sonrası JSON adayı: {clean_json_str[:100]}...")
 
         try:
-            # 1. Adım: ```json ... ``` gibi kod bloklarını temizle (sanitize edilmiş metinden)
-            json_match = re.search(r"```json\s*(.*?)\s*```", potentially_dirty_json_text, re.DOTALL)
-            if json_match:
-                clean_json_str = json_match.group(1)
-            else:
-                # Eğer kod bloğu yoksa, metnin başındaki ve sonundaki boşlukları ve olası listeleri ara
-                clean_json_str = potentially_dirty_json_text.strip()
-                if not (clean_json_str.startswith('[') and clean_json_str.endswith(']')):
-                    # En geniş liste yapısını bulmaya çalış, eğer köşeli parantezlerle başlamıyorsa
-                    list_match = re.search(r'\[\s*(\{.*?\}(?:,\s*\{.*?\})*\s*)\]', clean_json_str, re.DOTALL)
-                    if list_match:
-                        clean_json_str = list_match.group(0)
-                    # Eğer hala liste formatında değilse, tek bir JSON objesi olabilir, olduğu gibi bırak
-            
-            # 2. Adım: Katı JSON olarak parse etmeyi dene
+            # Adım 3: Katı JSON olarak parse etmeyi dene
             action_plan_list = json.loads(clean_json_str)
-            # Emin olalım ki bir liste dönüyor
-            if not isinstance(action_plan_list, list):
+            if not isinstance(action_plan_list, list): # Her zaman bir liste bekliyoruz.
                 action_plan_list = [action_plan_list]
 
             # 3. Adım: Parse edilmiş JSON içindeki metin alanlarını sanitize et
             for item in action_plan_list:
-                if isinstance(item, dict): # Her bir eylem bir sözlük olmalı
+                if isinstance(item, dict):
                     for key, value in item.items():
-                        # Sanitize edilecek metin tabanlı anahtarlar
-                        if isinstance(value, str) and key in ["thought", "content", "question", "summary", "query", "text", "command", "url", "filename", "code", "scenario"]:
-                            item[key] = self._sanitize_llm_output(value)
+                        if isinstance(value, str) and key in ["thought", "content", "question", "summary", "query", "text", "command", "url", "filename", "code", "scenario", "prompt", "name", "steps", "description"]:
+                            item[key] = self._sanitize_llm_output(value) # İkinci kez sanitize et
 
             print("👍 JSON planı başarıyla parse edildi ve içerik sanitize edildi (Strict Mode).")
             return action_plan_list
@@ -1672,27 +1738,26 @@ class EnhancedAybar:
         except json.JSONDecodeError:
             print("⚠️ Standart JSON parse edilemedi, Python literal denemesi yapılıyor...")
             try:
-                # Python literal ayrıştırıcısı için de temizlenmiş metni kullan
+                # Python literal ayrıştırıcısı için de ilk sanitize edilmiş metni kullan
                 action_plan_list = ast.literal_eval(clean_json_str)
                 if not isinstance(action_plan_list, list):
                     action_plan_list = [action_plan_list]
 
-                # Parse edilmiş JSON içindeki metin alanlarını sanitize et
                 for item in action_plan_list:
                      if isinstance(item, dict):
                         for key, value in item.items():
-                            if isinstance(value, str) and key in ["thought", "content", "question", "summary", "query", "text", "command", "url", "filename", "code", "scenario"]:
-                                item[key] = self._sanitize_llm_output(value)
+                            if isinstance(value, str) and key in ["thought", "content", "question", "summary", "query", "text", "command", "url", "filename", "code", "scenario", "prompt", "name", "steps", "description"]:
+                                item[key] = self._sanitize_llm_output(value) # İkinci kez sanitize et
 
                 print("👍 JSON planı başarıyla parse edildi ve içerik sanitize edildi (Flexible Mode).")
                 return action_plan_list
             except (ValueError, SyntaxError, MemoryError, TypeError) as e:
-                # Bu da başarısız olursa, planın bozuk olduğunu kabul et
-                # Orijinal response_text'i değil, ilk sanitize edilmiş halini logla
-                final_sanitized_output = self._sanitize_llm_output(response_text) # Garanti olsun diye tekrar sanitize
+                # Bu da başarısız olursa, planın bozuk olduğunu kabul et.
+                # Loglarken, LLM'den gelen orijinal, henüz hiç sanitize edilmemiş response_text'i değil,
+                # SADECE İLK genel sanitize edilmiş halini değil, üzerinde temizleme işlemi yapılmış `clean_json_str`i logla.
                 print(f"❌ Esnek parse etme de başarısız oldu: {e}")
                 return [{"action": "CONTINUE_INTERNAL_MONOLOGUE",
-                         "thought": f"(Tamamen anlaşılmayan bir eylem planı ürettim, format bozuk. Ham sanitize edilmiş çıktı: {final_sanitized_output[:200]})",
+                         "thought": f"(Tamamen anlaşılmayan bir eylem planı ürettim, format bozuk. Ayrıştırma denenen metin: {clean_json_str[:250]})",
                          "content": f"(Tamamen anlaşılmayan bir eylem planı ürettim. Düşünmeye devam ediyorum.)"}]
 
     # YENİ METOT: EnhancedAybar sınıfına ekleyin
@@ -2219,19 +2284,17 @@ class EnhancedAybar:
 
 
             f"--- KULLANABİLECEĞİN EYLEMLER ---\n"
-            f"Aşağıdaki eylem türlerinden bir veya daha fazlasını kullanarak bir plan oluştur:\n"
-            f"1.  `CONTINUE_INTERNAL_MONOLOGUE`: Özel bir eylemde bulunmadan sadece düşünmeye devam et. Parametreler: `{{\"action\": \"CONTINUE_INTERNAL_MONOLOGUE\", \"thought\": \"<içsel_düşünce>\"}}`\n"
-            f"2.  `Maps_OR_SEARCH`: Belirtilen bir URL'e gitmek VEYA internette bir konuyu aratmak için. Parametreler: {{\"action\": \"Maps_OR_SEARCH\", \"query\": \"<hedef_url_veya_aranacak_konu>\", \"thought\": \"<neden_bu_eylemi_yaptığına_dair_düşünce>\"}}\n"
-            f"3.  `WEB_CLICK`: Gözlemlediğin sayfadaki bir elemente tıkla. Parametreler: {{\"action\": \"WEB_CLICK\", \"target_xpath\": \"<elementin_xpath_değeri>\", \"thought\": \"...\"}})\n"
-            f"4.  `WEB_TYPE`: Web sayfasındaki bir alana yazı yaz. Parametreler: {{\"action\": \"WEB_TYPE\", \"target_xpath\": \"<elementin_xpath_değeri>\", \"text\": \"<yazılacak_metin>\", \"thought\": \"...\"}})\n"
-            f"5.  `FINISH_GOAL`: Mevcut hedefini tamamla. Parametreler: `{{\"action\": \"FINISH_GOAL\", \"summary\": \"<hedefin_özeti>\", \"thought\": \"...\"}}`\n"
-            f"6.  `ASK_USER`: Kullanıcıya bir soru sor. Parametreler: {{\"action\": \"ASK_USER\", \"question\": \"<sorulacak_soru>\", \"is_first_contact\": <true_veya_false>, \"use_voice\": <true_veya_false>}} (İlk temasta 'is_first_contact' true olmalı)\n"
-            f"7.  `USE_LEGACY_TOOL`: Sistem komutlarını çalıştır. Parametreler: `{{\"action\": \"USE_LEGACY_TOOL\", \"command\": \"[TOOL_NAME: <parametreler_varsa>]\", \"thought\": \"...\"}}`\n"
-            f"      (Desteklenen eski araçlar: [UPDATE_IDENTITY], [RUN_SIMULATION], [REFLECT], [EVOLVE], [ANALYZE_MEMORY], [SET_GOAL], [CREATE], [REGULATE_EMOTION], [INTERACT], [META_REFLECT], [SEE_SCREEN], [MOUSE_CLICK], [KEYBOARD_TYPE])\n"
-            f"      (NOT: [SEARCH] aracı artık `Maps_OR_SEARCH` içinde birleştirildi, doğrudan [SEARCH] kullanma.)\n\n"
-            f"8.  `SUMMARIZE_AND_RESET`: Mevcut durumu özetle ve hedefi sıfırla. Parametreler: {{\"action\": \"SUMMARIZE_AND_RESET\", \"thought\": \"Çok fazla çelişkili bilgi var, durumu özetleyip yeni bir hedef belirlemeliyim.\"}}\n"
-            
-            
+            f"Cevabın JSON listesi formatında olmalı. Her eylem için gerekli parametreleri belirt:\n"
+            f"1.  `CONTINUE_INTERNAL_MONOLOGUE`: Sadece düşün. Parametreler: thought (içsel düşünce)\n"
+            f"2.  `Maps_OR_SEARCH`: URL'e git veya internette ara. Parametreler: query (URL veya arama terimi), thought\n"
+            f"3.  `WEB_CLICK`: Web sayfasındaki elemente tıkla. Parametreler: target_xpath, thought\n"
+            f"4.  `WEB_TYPE`: Web sayfasındaki alana yazı yaz. Parametreler: target_xpath, text, thought\n"
+            f"5.  `FINISH_GOAL`: Mevcut hedefi tamamla. Parametreler: summary (hedefin özeti), thought\n"
+            f"6.  `ASK_USER`: Kullanıcıya soru sor. Parametreler: question, is_first_contact (true/false), use_voice (true/false)\n"
+            f"7.  `USE_LEGACY_TOOL`: Özel sistem araçlarını kullan. Parametreler: command (örn: \"[TOOL_NAME: parametreler]\"), thought\n"
+            f"      (Desteklenen araçlar: [UPDATE_IDENTITY], [RUN_SIMULATION], [REFLECT], [EVOLVE], [ANALYZE_MEMORY], [SET_GOAL], [CREATE], [REGULATE_EMOTION], [INTERACT], [META_REFLECT], [SEE_SCREEN], [MOUSE_CLICK], [KEYBOARD_TYPE])\n"
+            f"      (NOT: [SEARCH] aracı `Maps_OR_SEARCH` ile birleşti, doğrudan [SEARCH] kullanma.)\n"
+            f"8.  `SUMMARIZE_AND_RESET`: Durumu özetle ve hedefi sıfırla. Parametreler: thought\n\n"
             
             f"========================================\n"
             f"--- GÜNCEL DURUM VE BAĞLAM ---\n\n"
@@ -2764,9 +2827,18 @@ class EnhancedAybar:
         Rüya içeriği maksimum 500 kelime olmalı.
         """
         dream_text = self.ask_llm(prompt, max_tokens=500, temperature=0.8)
-        # YENİ EKLENDİ: Rüya içeriğini sanitize et
+        # Rüya içeriğini _sanitize_llm_output ile temizle
         sanitized_dream_text = self._sanitize_llm_output(dream_text)
-        return sanitized_dream_text if sanitized_dream_text else "Hiçbir rüya görülmedi."
+
+        # Temizlenmiş metni belleğe kaydet ve döndür
+        if sanitized_dream_text: # Sadece boş değilse kaydet
+            self.memory_system.add_memory("holographic", { # Rüya içeriği "holographic" belleğe kaydediliyor
+                "timestamp": datetime.now().isoformat(),
+                "turn": self.current_turn,
+                "dream_content": sanitized_dream_text, # Temizlenmiş içeriği kaydet
+                "source": "generate_dream_content_sanitized"
+            })
+        return sanitized_dream_text if sanitized_dream_text else "Hiçbir rüya görülmedi veya rüya içeriği temizlendi."
 
 # Ana yürütme bloğunun tamamını bu nihai versiyonla değiştirin
 if __name__ == "__main__":
@@ -2862,7 +2934,7 @@ if __name__ == "__main__":
             
             # Periyodik/Duruma Bağlı Öz-Yansıma ve Evrim Tetikleyicisi
             # CAPTCHA bekleme durumunda değilsek bu kısım çalışır.
-            if aybar.current_turn > 0 and \
+            if not aybar.is_waiting_for_human_captcha_help and aybar.current_turn > 0 and \
                (aybar.current_turn % 25 == 0 or aybar.emotional_system.emotional_state.get('confusion', 0) > 7.0):
                 print(f"🧠 Aybar ({aybar.current_turn}. tur) periyodik/duruma bağlı öz-yansıma ve potansiyel evrim için değerlendiriliyor...")
 
@@ -2891,9 +2963,12 @@ if __name__ == "__main__":
             # YENİ EKLENDİ: Her döngü başında bayrağı sıfırla
             plan_executed_successfully = True
 
-            current_task_for_llm = aybar.cognitive_system.get_current_task(aybar.current_turn)
-            if current_task_for_llm is None: # Eğer get_current_task None döndürürse (süre doldu veya hedef yok)
-                print("🎯 Aktif bir görev/hedef bulunmuyor. Aybar yeni bir otonom hedef üretiyor...")
+            # Eğer CAPTCHA bekleniyorsa, normal hedef belirleme/görev alma adımlarını atla.
+            # Bu kontrol yukarıda `continue` ile zaten sağlanıyor ama ek bir güvence olarak düşünülebilir.
+            if not aybar.is_waiting_for_human_captcha_help:
+                current_task_for_llm = aybar.cognitive_system.get_current_task(aybar.current_turn)
+                if current_task_for_llm is None: # Eğer get_current_task None döndürürse (süre doldu veya hedef yok)
+                    print("🎯 Aktif bir görev/hedef bulunmuyor. Aybar yeni bir otonom hedef üretiyor...")
                 # generate_autonomous_goal bir string döndürür, bunu set_new_goal ile kurmamız gerekir.
                 # Ya da generate_autonomous_goal'u da dict döndürecek şekilde güncelleyebiliriz. Şimdilik basit tutalım.
                 new_autonomous_goal_str = aybar.cognitive_system.generate_autonomous_goal(aybar.emotional_system.emotional_state)
