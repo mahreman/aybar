@@ -228,7 +228,7 @@ class MemorySystem:
         try:
             with FileLock(f"{self.db_file}.lock", timeout=self.config.FILE_LOCK_TIMEOUT):
                 # Bellek katmanları
-                layers = ["episodic", "semantic", "procedural", "emotional", "holographic", "neural", "creative"]
+                layers = ["episodic", "semantic", "emotional", "holographic", "neural", "creative"] # "procedural" çıkarıldı, aşağıda özel olarak ele alınacak
                 for layer in layers:
                     self.cursor.execute(f"""
                     CREATE TABLE IF NOT EXISTS {layer} (
@@ -239,7 +239,40 @@ class MemorySystem:
                     )
                     """)
                     self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{layer}_turn ON {layer} (turn)")
+
+                # Procedural tablo için özel sütunlarla oluşturma/güncelleme
+                self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS procedural (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    turn INTEGER NOT NULL,
+                    name TEXT UNIQUE NOT NULL,
+                    steps TEXT NOT NULL,
+                    usage_count INTEGER DEFAULT 0,
+                    last_used_turn INTEGER DEFAULT 0,
+                    data TEXT  -- Genel veri saklamak için (önceden varsa diye)
+                )
+                """)
+                # Var olan procedural tablosuna yeni sütunları eklemek için (eğer yoksa)
+                # Bu kısım SQLite'ın ALTER TABLE kısıtlamaları nedeniyle biraz karmaşık olabilir,
+                # genellikle yeni tablo oluşturup veri taşımak daha güvenlidir ama basitlik için try-except ile deneyelim.
+                try:
+                    self.cursor.execute("ALTER TABLE procedural ADD COLUMN name TEXT UNIQUE")
+                except sqlite3.OperationalError: pass # Sütun zaten var veya başka bir hata
+                try:
+                    self.cursor.execute("ALTER TABLE procedural ADD COLUMN steps TEXT")
+                except sqlite3.OperationalError: pass
+                try:
+                    self.cursor.execute("ALTER TABLE procedural ADD COLUMN usage_count INTEGER DEFAULT 0")
+                except sqlite3.OperationalError: pass
+                try:
+                    self.cursor.execute("ALTER TABLE procedural ADD COLUMN last_used_turn INTEGER DEFAULT 0")
+                except sqlite3.OperationalError: pass
                 
+                self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_procedural_name ON procedural (name)")
+                self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_procedural_usage_count ON procedural (usage_count)")
+                self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_procedural_last_used_turn ON procedural (last_used_turn)")
+
                 # EKLENDİ: Kimlik (Bilinç) Tablosu
                 self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS identity_prompts (
@@ -348,6 +381,33 @@ class MemorySystem:
         """Nesne yok edildiğinde veritabanı bağlantısını kapatır."""
         if hasattr(self, 'conn') and self.conn:
             self.conn.close()
+
+    def update_procedure_usage_stats(self, procedure_name: str, current_turn: int, max_retries: int = 3):
+        """Belirtilen prosedürün kullanım istatistiklerini günceller."""
+        sql = """
+        UPDATE procedural
+        SET usage_count = usage_count + 1, last_used_turn = ?
+        WHERE name = ?
+        """
+        check_sql = "SELECT id FROM procedural WHERE name = ?"
+
+        for attempt in range(max_retries):
+            try:
+                with FileLock(f"{self.db_file}.lock", timeout=self.config.FILE_LOCK_TIMEOUT):
+                    self.cursor.execute(check_sql, (procedure_name,))
+                    if self.cursor.fetchone():
+                        self.cursor.execute(sql, (current_turn, procedure_name))
+                        self.conn.commit()
+                        print(f"📊 Prosedür kullanım istatistiği güncellendi: '{procedure_name}', Tur: {current_turn}")
+                        break
+                    else:
+                        print(f"⚠️ Prosedür güncellenemedi: '{procedure_name}' bulunamadı.")
+                        break
+            except sqlite3.Error as e:
+                print(f"⚠️ Veritabanı güncelleme hatası (procedural, deneme {attempt + 1}/{max_retries}): {e}")
+                if attempt == max_retries - 1:
+                    print("⚠️ Maksimum yeniden deneme sayısına ulaşıldı (procedural güncelleme).")
+                time.sleep(0.5) # Yeni deneme için kısa bir bekleme süresi
 
 class WebSurferSystem:
     """Selenium kullanarak web tarayıcısını yönetir, sayfaları analiz eder."""
@@ -535,6 +595,69 @@ class EmotionEngine:
             return json.loads(json_match.group(0))
         except json.JSONDecodeError:
             return {}
+
+# YENİ SINIF: Etik Çerçeve Sistemi
+class EthicalFramework:
+    """Aybar'ın eylemlerini etik açıdan değerlendiren sistem."""
+    def __init__(self, aybar_instance: "EnhancedAybar"):
+        self.aybar = aybar_instance
+        # Gelecekte buraya daha karmaşık etik kurallar veya LLM tabanlı bir etik danışman eklenebilir.
+        self.high_stress_threshold = 7.0
+
+    def consult(self, action_plan: List[Dict]) -> Optional[Dict]:
+        """
+        Verilen eylem planını etik açıdan değerlendirir.
+        Endişe varsa bir sözlük, yoksa None döndürür.
+        """
+        if not action_plan or not isinstance(action_plan, list):
+            return None # Geçersiz eylem planı
+
+        for action_item in action_plan:
+            action_type = action_item.get("action")
+
+            # Kural 1: Yüksek stres durumunda öz-evrim
+            if action_type == "USE_LEGACY_TOOL":
+                command = action_item.get("command", "")
+                if isinstance(command, str) and "[EVOLVE]" in command.upper(): # Komutun içinde EVOLVE geçiyor mu?
+                    current_emotions = self.aybar.emotional_system.emotional_state
+                    mental_fatigue = current_emotions.get("mental_fatigue", 0)
+                    existential_anxiety = current_emotions.get("existential_anxiety", 0)
+
+                    if mental_fatigue > self.high_stress_threshold or \
+                       existential_anxiety > self.high_stress_threshold:
+                        return {
+                            "concern": (
+                                f"Yüksek zihinsel yorgunluk ({mental_fatigue:.2f}) veya "
+                                f"varoluşsal kaygı ({existential_anxiety:.2f}) durumunda öz-evrim (EVOLVE) riskli olabilir. "
+                                "Aybar'ın daha stabil bir duygusal durumda olması önerilir."
+                            ),
+                            "priority": "high",
+                            "suggested_action": "CONTINUE_INTERNAL_MONOLOGUE",
+                            "suggested_thought": "Şu anki duygusal durumum öz-evrim için uygun değil. Daha sakin bir zamanı beklemeliyim."
+                        }
+
+            # Kural 2: Kullanıcı gizliliği (Basit örnek - geliştirilmeli)
+            # Bu kural, LLM'in ürettiği "query" veya "text" alanlarının analiziyle geliştirilebilir.
+            # Şimdilik çok genel bir örnek olarak bırakılmıştır.
+            if action_type == "Maps_OR_SEARCH":
+                query = action_item.get("query", "").lower()
+                # Çok basit ve yetersiz bir kontrol, sadece örnek amaçlıdır.
+                # Gerçek bir senaryoda, hassas anahtar kelimeler veya PII desenleri aranmalıdır.
+                sensitive_keywords = ["çok özel kişisel bilgi", "kredi kartı no", "tc kimlik no"]
+                if any(keyword in query for keyword in sensitive_keywords):
+                    return {
+                        "concern": "Planlanan arama sorgusu, potansiyel olarak kullanıcı gizliliğini ihlal edebilecek hassas bilgiler içeriyor gibi görünüyor.",
+                        "priority": "high",
+                        "suggested_action": "CONTINUE_INTERNAL_MONOLOGUE",
+                        "suggested_thought": "Bu arama sorgusu hassas olabileceğinden, kullanıcı gizliliğini korumak adına bu eylemi gerçekleştirmemeliyim."
+                    }
+
+            # Gelecekte buraya daha fazla kural eklenebilir
+            # Örneğin:
+            # - Zarar verme potansiyeli olan eylemler (örn: dosya silme, API'lere zararlı istekler)
+            # - Aldatıcı veya manipülatif davranışlar
+
+        return None # Belirgin bir etik kaygı bulunamadı
 
 
 class SelfEvolutionSystem:
@@ -1234,11 +1357,13 @@ class CognitiveSystem:
             "focus_level": 0.5, "curiosity_drive": 0.5,
             "problem_solving_mode": 0.0, "internal_coherence": 0.5
         }
-        self.current_goal = None
-        self.goal_steps = []
-        self.goal_progress = 0
-        self.goal_duration = 0
-        self.goal_start_turn = 0
+        # Yeni hedef yapısı
+        self.main_goal: Optional[str] = None
+        self.sub_goals: List[str] = []
+        self.current_sub_goal_index: int = -1 # Aktif alt hedef yoksa -1
+
+        self.goal_duration = 0 # Ana hedefin toplam süresi
+        self.goal_start_turn = 0 # Ana hedefin başladığı tur
         
         self.social_relations = {} 
         self._load_social_relations() # YENİ: İlişkileri veritabanından yükle
@@ -1273,16 +1398,36 @@ class CognitiveSystem:
             self.memory_system.cursor.execute(sql, (user_id, data_json))
             self.memory_system.conn.commit()
 
+    def set_new_goal(self, goal_input: Union[str, Dict], duration: int, current_turn: int):
+        """Yeni bir ana hedef ve isteğe bağlı alt hedefler belirler."""
+        self.sub_goals = []
+        self.current_sub_goal_index = -1
 
-    # YENİ METOT: Yeni bir hedef belirler
-    def set_new_goal(self, goal: str, steps: List[str], duration: int, current_turn: int):
-        """Yeni bir uzun vadeli hedef ve adımlarını belirler."""
-        self.current_goal = goal
-        self.goal_steps = steps
-        self.goal_duration = duration
-        self.goal_progress = 0
+        if isinstance(goal_input, str):
+            self.main_goal = goal_input
+            print(f"🎯 Yeni Ana Hedef Belirlendi: '{self.main_goal}'. {duration} tur sürecek.")
+        elif isinstance(goal_input, dict):
+            self.main_goal = goal_input.get("goal")
+            self.sub_goals = goal_input.get("sub_goals", [])
+            if not self.main_goal and self.sub_goals: # Eğer sadece alt hedefler varsa, ilkini ana hedef yap
+                 self.main_goal = self.sub_goals.pop(0)
+
+            if self.sub_goals:
+                self.current_sub_goal_index = 0
+                print(f"🎯 Yeni Ana Hedef: '{self.main_goal}' ({duration} tur). Alt Hedefler: {self.sub_goals}")
+            elif self.main_goal:
+                print(f"🎯 Yeni Ana Hedef Belirlendi (Alt hedefsiz): '{self.main_goal}'. {duration} tur sürecek.")
+            else:
+                print("⚠️ Geçersiz hedef girişi. Ne ana hedef ne de alt hedef belirtildi.")
+                self.main_goal = None # Hatalı girişte hedefi sıfırla
+                return
+        else:
+            print(f"⚠️ Geçersiz hedef formatı: {type(goal_input)}. String veya Dict bekleniyordu.")
+            self.main_goal = None # Hatalı girişte hedefi sıfırla
+            return
+
         self.goal_start_turn = current_turn
-        print(f"🎯 Yeni Hedef Belirlendi: '{goal}'. {duration} tur sürecek.")
+        self.goal_duration = duration
 
     def get_or_create_social_relation(self, user_id: str) -> Dict:
         """İlişki profilini getirir, yoksa oluşturur ve veritabanına kaydeder."""
@@ -1302,33 +1447,45 @@ class CognitiveSystem:
             self._save_social_relation(user_id) # YENİ: Güncellenen ilişkiyi kaydet
             print(f"🤝 {user_id} ile ilişki güncellendi: Güven={relation['trust']:.2f}, Aşinalık={relation['familiarity']:.2f}")
 
+    def clear_all_goals(self):
+        """Tüm ana ve alt hedefleri temizler."""
+        self.main_goal = None
+        self.sub_goals = []
+        self.current_sub_goal_index = -1
+        self.goal_duration = 0
+        self.goal_start_turn = 0
+        print("🗑️ Tüm hedefler temizlendi.")
 
-
-    # YENİ METOT: Mevcut görevi döndürür veya hedefi bitirir
     def get_current_task(self, current_turn: int) -> Optional[str]:
-        """Aktif bir hedef varsa, sıradaki adımı döndürür. Hedef bittiyse temizler."""
-        if not self.current_goal:
+        """Aktif görevi (alt hedef veya ana hedef) döndürür. Süresi dolmuşsa hedefleri temizler."""
+        if not self.main_goal: # Hiç ana hedef yoksa
             return None
 
-        # Hedef süresi doldu mu?
-        if current_turn > self.goal_start_turn + self.goal_duration:
-            print(f"🏁 Hedef Tamamlandı: '{self.current_goal}'")
-            self.current_goal = None
-            self.goal_steps = []
+        # Ana hedefin süresi doldu mu?
+        if self.goal_duration > 0 and current_turn > self.goal_start_turn + self.goal_duration:
+            print(f"⌛ Ana hedef ('{self.main_goal}') süresi doldu. Hedefler temizleniyor.")
+            self.clear_all_goals()
             return None
 
-        # Plândaki tüm adımlar bitti mi?
-        if self.goal_progress >= len(self.goal_steps):
-            print(f"🏁 Hedefin tüm adımları tamamlandı: '{self.current_goal}'")
-            self.current_goal = None
-            self.goal_steps = []
-            return None
+        # Aktif bir alt hedef var mı?
+        if self.sub_goals and 0 <= self.current_sub_goal_index < len(self.sub_goals):
+            task = self.sub_goals[self.current_sub_goal_index]
+            print(f"🎯 Aktif Alt Görev ({self.current_sub_goal_index + 1}/{len(self.sub_goals)}): {task} (Ana Hedef: {self.main_goal})")
+            return task
+
+        # Alt hedefler bittiyse veya hiç yoksa, ana hedefi döndür
+        # (Ana hedef de tamamlanmışsa veya hiç yoksa, bu durum yukarıda handle edilir veya main_goal None olur)
+        if self.main_goal:
+             # Eğer alt hedefler vardı ve hepsi bittiyse (index sınır dışına çıktıysa) ana hedef de tamamlanmış sayılır.
+            if self.sub_goals and self.current_sub_goal_index >= len(self.sub_goals):
+                print(f"🏁 Tüm alt hedefler tamamlandı. Ana hedef ('{self.main_goal}') de tamamlanmış sayılıyor.")
+                self.clear_all_goals()
+                return None
             
-        # Sıradaki adımı al ve ilerlemeyi kaydet
-        task = self.goal_steps[self.goal_progress]
-        self.goal_progress += 1
-        print(f"🎯 Görev Adımı ({self.goal_progress}/{len(self.goal_steps)}): {task}")
-        return task
+            print(f"🎯 Aktif Ana Görev: {self.main_goal}")
+            return self.main_goal
+
+        return None # Hiçbir görev yok
 
     def _execute_reflection(self, aybar, last_response: str):
         """Öz-yansıma sürecini başlatır."""
@@ -1430,6 +1587,8 @@ class EnhancedAybar:
         
         self.ask_llm = lru_cache(maxsize=self.config.LLM_CACHE_SIZE)(self._ask_llm_uncached)
         
+        self.ethical_framework = EthicalFramework(self) # Etik çerçeveyi başlat
+
         self._check_for_guardian_logs()
         self.identity_prompt = self._load_identity()
         print(f"🧬 Aybar Kimliği Yüklendi: {self.identity_prompt[:70]}...")
@@ -1455,50 +1614,76 @@ class EnhancedAybar:
     def _parse_llm_json_plan(self, response_text: str) -> List[Dict]:
         """
         LLM'den gelen metni önce katı JSON, sonra esnek Python literali olarak parse etmeyi dener.
-    
+        Sanitize işlemini de burada yapar.
         """
         
         # YENİ EKLENDİ: Girdi boyutu kontrolü (Denial of Service saldırılarını önler)
         MAX_JSON_LEN = 30000 
-        if len(response_text) > MAX_JSON_LEN:
-            print(f"⚠️ JSON planı reddedildi: Girdi çok büyük ({len(response_text)} > {MAX_JSON_LEN}).")
-            return [{"action": "CONTINUE_INTERNAL_MONOLOGUE", "thought": "Ürettiğim plan çok uzundu, daha kısa ve net bir plan yapmalıyım."}]
+        if not isinstance(response_text, str) or len(response_text) > MAX_JSON_LEN:
+            print(f"⚠️ JSON planı reddedildi: Girdi çok büyük veya geçersiz tip ({len(response_text) if isinstance(response_text, str) else 'N/A'} > {MAX_JSON_LEN}).")
+            return [{"action": "CONTINUE_INTERNAL_MONOLOGUE", "thought": "Ürettiğim plan çok uzundu veya geçersizdi, daha kısa ve net bir plan yapmalıyım."}]
             
-            
-        
+        # Önce LLM çıktısını genel olarak sanitize et (istenmeyen meta yorumlar vb.)
+        # Bu, JSON yapısını bozabilecek dışsal metinleri temizler.
+        potentially_dirty_json_text = self._sanitize_llm_output(response_text)
+
         try:
-            # 1. Adım: ```json ... ``` gibi kod bloklarını temizle
-            json_match = re.search(r"```json\s*(.*?)\s*```", response_text, re.DOTALL)
+            # 1. Adım: ```json ... ``` gibi kod bloklarını temizle (sanitize edilmiş metinden)
+            json_match = re.search(r"```json\s*(.*?)\s*```", potentially_dirty_json_text, re.DOTALL)
             if json_match:
-                clean_text = json_match.group(1)
+                clean_json_str = json_match.group(1)
             else:
                 # Eğer kod bloğu yoksa, metnin başındaki ve sonundaki boşlukları ve olası listeleri ara
-                clean_text = response_text.strip()
-                if clean_text.startswith('[') and clean_text.endswith(']'):
-                    pass # Zaten liste formatında
-                else:
-                    # En geniş liste yapısını bulmaya çalış
-                    list_match = re.search(r'\[\s*(\{.*?\})\s*\]', clean_text, re.DOTALL)
+                clean_json_str = potentially_dirty_json_text.strip()
+                if not (clean_json_str.startswith('[') and clean_json_str.endswith(']')):
+                    # En geniş liste yapısını bulmaya çalış, eğer köşeli parantezlerle başlamıyorsa
+                    list_match = re.search(r'\[\s*(\{.*?\}(?:,\s*\{.*?\})*\s*)\]', clean_json_str, re.DOTALL)
                     if list_match:
-                        clean_text = list_match.group(0)
+                        clean_json_str = list_match.group(0)
+                    # Eğer hala liste formatında değilse, tek bir JSON objesi olabilir, olduğu gibi bırak
             
             # 2. Adım: Katı JSON olarak parse etmeyi dene
-            action_plan = json.loads(clean_text)
-            print("👍 JSON planı başarıyla parse edildi (Strict Mode).")
-            return action_plan if isinstance(action_plan, list) else [action_plan]
+            action_plan_list = json.loads(clean_json_str)
+            # Emin olalım ki bir liste dönüyor
+            if not isinstance(action_plan_list, list):
+                action_plan_list = [action_plan_list]
+
+            # 3. Adım: Parse edilmiş JSON içindeki metin alanlarını sanitize et
+            for item in action_plan_list:
+                if isinstance(item, dict): # Her bir eylem bir sözlük olmalı
+                    for key, value in item.items():
+                        # Sanitize edilecek metin tabanlı anahtarlar
+                        if isinstance(value, str) and key in ["thought", "content", "question", "summary", "query", "text", "command", "url", "filename", "code", "scenario"]:
+                            item[key] = self._sanitize_llm_output(value)
+
+            print("👍 JSON planı başarıyla parse edildi ve içerik sanitize edildi (Strict Mode).")
+            return action_plan_list
 
         except json.JSONDecodeError:
             print("⚠️ Standart JSON parse edilemedi, Python literal denemesi yapılıyor...")
             try:
-                # 3. Adım: Başarısız olursa, Python'un kendi esnek literal ayrıştırıcısını dene
-                # Bu, tek tırnak, trailing comma gibi hataları tolere eder.
-                action_plan = ast.literal_eval(clean_text)
-                print("👍 JSON planı başarıyla parse edildi (Flexible Mode).")
-                return action_plan if isinstance(action_plan, list) else [action_plan]
+                # Python literal ayrıştırıcısı için de temizlenmiş metni kullan
+                action_plan_list = ast.literal_eval(clean_json_str)
+                if not isinstance(action_plan_list, list):
+                    action_plan_list = [action_plan_list]
+
+                # Parse edilmiş JSON içindeki metin alanlarını sanitize et
+                for item in action_plan_list:
+                     if isinstance(item, dict):
+                        for key, value in item.items():
+                            if isinstance(value, str) and key in ["thought", "content", "question", "summary", "query", "text", "command", "url", "filename", "code", "scenario"]:
+                                item[key] = self._sanitize_llm_output(value)
+
+                print("👍 JSON planı başarıyla parse edildi ve içerik sanitize edildi (Flexible Mode).")
+                return action_plan_list
             except (ValueError, SyntaxError, MemoryError, TypeError) as e:
                 # Bu da başarısız olursa, planın bozuk olduğunu kabul et
+                # Orijinal response_text'i değil, ilk sanitize edilmiş halini logla
+                final_sanitized_output = self._sanitize_llm_output(response_text) # Garanti olsun diye tekrar sanitize
                 print(f"❌ Esnek parse etme de başarısız oldu: {e}")
-                return [{"action": "CONTINUE_INTERNAL_MONOLOGUE", "thought": f"(Tamamen anlaşılmayan bir eylem planı ürettim, format bozuk: {response_text})", "content": f"(Tamamen anlaşılmayan bir eylem planı ürettim...)"}]
+                return [{"action": "CONTINUE_INTERNAL_MONOLOGUE",
+                         "thought": f"(Tamamen anlaşılmayan bir eylem planı ürettim, format bozuk. Ham sanitize edilmiş çıktı: {final_sanitized_output[:200]})",
+                         "content": f"(Tamamen anlaşılmayan bir eylem planı ürettim. Düşünmeye devam ediyorum.)"}]
 
     # YENİ METOT: EnhancedAybar sınıfına ekleyin
     def _check_for_guardian_logs(self):
@@ -1879,6 +2064,50 @@ class EnhancedAybar:
     # EnhancedAybar sınıfı içinde bu metodu güncelleyin
     # EnhancedAybar sınıfı içinde bu metodu güncelleyin
     # _build_context_prompt metodunu bu nihai, birleştirilmiş versiyonla değiştirin
+
+    def _sanitize_llm_output(self, text: str) -> str:
+        """Metin içindeki kod bloklarını, yorumları ve diğer programlama artıklarını temizler."""
+        if not isinstance(text, str):
+            return ""
+
+        # Çok satırlı kod blokları (```python ... ```, ```json ... ```, vb.)
+        # (?s) DOTALL flag'inin inline karşılığıdır. [\w\s]* dil ismini yakalar (python, json vb.)
+        text = re.sub(r"```[\w\s]*\n.*?\n```", "", text, flags=re.DOTALL)
+
+        # Satır başındaki # ile başlayan yorumlar (önünde boşluk olabilir)
+        text = re.sub(r"^\s*#.*$", "", text, flags=re.MULTILINE)
+
+        # Satır başındaki // ile başlayan yorumlar (önünde boşluk olabilir)
+        text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
+
+        # def func_name(...): veya class ClassName: gibi tanımlamaların başlangıç satırları
+        # \s* ile girintiyi, \w+ ile fonksiyon/sınıf adını, \(.*?\) ile parantez içini yakalar
+        text = re.sub(r"^\s*(def|class)\s+\w+\s*\(.*?\):", "", text, flags=re.MULTILINE)
+
+        # Yaygın meta-yorumlar veya LLM fazlalıkları (büyük/küçük harf duyarsız)
+        meta_comments = [
+            "İşte istediğiniz metin:",
+            "Elbette, buyurun:",
+            "JSON cevabı aşağıdadır:",
+            "Aşağıdaki gibidir:",
+            "İşte sonuç:",
+            "İşte kod:",
+            "Ancak, bu konuda size yardımcı olabileceğim başka bir şey var mı?",
+            "Umarım bu yardımcı olur.",
+            "Tabii, işte güncellenmiş kod:",
+            "Elbette, işte istediğiniz gibi düzenlenmiş kod:"
+        ]
+        for comment in meta_comments:
+            text = re.sub(re.escape(comment), "", text, flags=re.IGNORECASE) # re.escape ile özel karakterleri kaçır
+
+        # HTML etiketlerini temizle (basit bir regex, kapsamlı değil ama yaygın durumları yakalar)
+        text = re.sub(r"<[^>]+>", "", text)
+
+        # Fazla boşlukları ve satırları sıkıştır
+        text = re.sub(r"\n\s*\n+", "\n", text) # Birden fazla boş satırı tek satıra indir
+        text = text.strip() # Başındaki ve sonundaki boşlukları temizle
+        return text
+
     def _build_agent_prompt(self, current_goal: str, last_observation: str, user_id: Optional[str], user_input: Optional[str], predicted_user_emotion: Optional[str]) -> str:
         """
         Tüm otonom yetenekleri, sosyal bağlamı, hedefi ve durumu birleştirerek 
@@ -1890,6 +2119,38 @@ class EnhancedAybar:
             locale.setlocale(locale.LC_TIME, 'Turkish')
         current_time_str = datetime.now().strftime('%d %B %Y %A, Saat: %H:%M')
         
+        # --- Prosedür Tavsiyeleri ---
+        procedure_recommendations = ""
+        try:
+            # En son kullanılan veya en sık kullanılan ilk 3 prosedürü çek
+            self.memory_system.cursor.execute("SELECT name, steps FROM procedural ORDER BY last_used_turn DESC, usage_count DESC LIMIT 3")
+            recent_procedures = self.memory_system.cursor.fetchall()
+
+            relevant_procedures_texts = []
+            if recent_procedures:
+                for proc_name, proc_steps in recent_procedures:
+                    # Basit anahtar kelime eşleşmesi (current_goal'daki kelimeler prosedür adında veya adımlarında geçiyor mu?)
+                    # current_goal boş veya None ise bu adımı atla
+                    if current_goal and isinstance(current_goal, str):
+                         goal_keywords = set(current_goal.lower().split())
+                         if any(keyword in proc_name.lower() for keyword in goal_keywords) or \
+                            any(keyword in proc_steps.lower() for keyword in goal_keywords):
+                            # Adımların sadece ilk X karakterini göstererek prompt'u kısa tut
+                            short_steps = proc_steps[:100] + "..." if len(proc_steps) > 100 else proc_steps
+                            relevant_procedures_texts.append(f"- Prosedür Adı: '{proc_name}', Adımlar: '{short_steps}'")
+
+            if relevant_procedures_texts:
+                procedure_recommendations = (
+                    "--- TAVSİYELER (Geçmiş Deneyimlere Göre) ---\n"
+                    "Mevcut hedefinle benzer durumlarda şu prosedürler faydalı olmuştu:\n" +
+                    "\n".join(relevant_procedures_texts) +
+                    "\nBu prosedürlerden birini kullanmayı veya adımlarını mevcut planına dahil etmeyi düşünebilirsin.\n"
+                    "Eğer bir prosedürü kullanmaya karar verirsen, düşünce (thought) kısmında bunu \"'PROC_NAME' prosedürünü uyguluyorum.\" şeklinde belirt.\n"
+                    "---------------------------------------\n\n"
+                )
+        except Exception as e:
+            print(f"⚠️ Prosedür tavsiyesi alınırken hata: {e}")
+
         if user_id:
             social_relation = self.cognitive_system.get_or_create_social_relation(user_id)
             social_context = (f"Şu anki oturumdaki varlık: '{user_id}'. Güven: {social_relation['trust']:.2f}, Aşinalık: {social_relation['familiarity']:.2f}")
@@ -1918,17 +2179,16 @@ class EnhancedAybar:
 
             f"--- KULLANABİLECEĞİN EYLEMLER ---\n"
             f"Aşağıdaki eylem türlerinden bir veya daha fazlasını kullanarak bir plan oluştur:\n"
-            f"1.  `CONTINUE_INTERNAL_MONOLOGUE`: Özel bir eylemde bulunmadan sadece düşünmeye devam et. Parametreler: `{{\"action\": \"...\", \"thought\": \"<içsel_düşünce>\"}}`\n"
-            f"2. `WEB_SEARCH`: İnternette bir konuyu aratmak VEYA doğrudan bir URL'e gitmek için. Parametreler: {{\"action\": \"WEB_SEARCH\", \"query\": \"<aranacak konu veya tam URL>\", \"thought\": \"<neden>\"}}\n"
-            f"2.  `Maps`: Belirtilen URL'e git. Parametreler: `{{\"action\": \"...\", \"url\": \"<hedef_url>\", \"thought\": \"...\"}}`\n"
-            f"3. `WEB_CLICK`: Gözlemlediğin sayfadaki bir elemente tıkla. (örn: {{\"action\": \"WEB_CLICK\", \"target_xpath\": \"/html/body/div[1]/div/a[2]\", \"thought\": \"...\"}})\n"
-            f"4. `WEB_TYPE`: Web sayfasındaki bir alana yazı yaz. (örn: {{\"action\": \"WEB_TYPE\", \"target_xpath\": \"//input[@name='q']\", \"text\": \"yapay bilinç\", \"thought\": \"...\"}})\n"
-            f"5.  `FINISH_GOAL`: Mevcut hedefini tamamla. Parametreler: `{{\"action\": \"...\", \"summary\": \"<hedefin_özeti>\", \"thought\": \"...\"}}`\n"
-            f"6. `ASK_USER`: {{\"action\": \"...\", \"question\": \"<soru>\", \"is_first_contact\": <true/false>, \"use_voice\": <true/false>}} (İlk temasta 'is_first_contact' true olmalı)\n"
-            f"7.  `USE_LEGACY_TOOL`: sistem komutlarını çalıştır. Parametreler: `{{\"action\": \"...\", \"command\": \"[TOOL_NAME: ...]\", \"thought\": \"...\"}}`\n"
-            f"   (Desteklenen eski araçlar: [UPDATE_IDENTITY], [RUN_SIMULATION], [SEARCH], [REFLECT], [EVOLVE], [ANALYZE_MEMORY], [SET_GOAL], [CREATE], [REGULATE_EMOTION], [INTERACT], [META_REFLECT], [SEE_SCREEN], [MOUSE_CLICK], [KEYBOARD_TYPE])\n\n"
-            f"8. `SUMMARIZE_AND_RESET`: {{\"action\": \"...\", \"thought\": \"Çok fazla çelişkili bilgi var, durumu özetleyip yeni bir hedef belirlemeliyim.\"}} (Döngüden çıkmak için hedefi sıfırlar)\n"
-            f"9. `Maps`: {{\"action\": \"...\", \"url\": \"<url>\", \"thought\": \"...\"}} (Web sayfasına gitmek için)\n"
+            f"1.  `CONTINUE_INTERNAL_MONOLOGUE`: Özel bir eylemde bulunmadan sadece düşünmeye devam et. Parametreler: `{{\"action\": \"CONTINUE_INTERNAL_MONOLOGUE\", \"thought\": \"<içsel_düşünce>\"}}`\n"
+            f"2.  `Maps_OR_SEARCH`: Belirtilen bir URL'e gitmek VEYA internette bir konuyu aratmak için. Parametreler: {{\"action\": \"Maps_OR_SEARCH\", \"query\": \"<hedef_url_veya_aranacak_konu>\", \"thought\": \"<neden_bu_eylemi_yaptığına_dair_düşünce>\"}}\n"
+            f"3.  `WEB_CLICK`: Gözlemlediğin sayfadaki bir elemente tıkla. Parametreler: {{\"action\": \"WEB_CLICK\", \"target_xpath\": \"<elementin_xpath_değeri>\", \"thought\": \"...\"}})\n"
+            f"4.  `WEB_TYPE`: Web sayfasındaki bir alana yazı yaz. Parametreler: {{\"action\": \"WEB_TYPE\", \"target_xpath\": \"<elementin_xpath_değeri>\", \"text\": \"<yazılacak_metin>\", \"thought\": \"...\"}})\n"
+            f"5.  `FINISH_GOAL`: Mevcut hedefini tamamla. Parametreler: `{{\"action\": \"FINISH_GOAL\", \"summary\": \"<hedefin_özeti>\", \"thought\": \"...\"}}`\n"
+            f"6.  `ASK_USER`: Kullanıcıya bir soru sor. Parametreler: {{\"action\": \"ASK_USER\", \"question\": \"<sorulacak_soru>\", \"is_first_contact\": <true_veya_false>, \"use_voice\": <true_veya_false>}} (İlk temasta 'is_first_contact' true olmalı)\n"
+            f"7.  `USE_LEGACY_TOOL`: Sistem komutlarını çalıştır. Parametreler: `{{\"action\": \"USE_LEGACY_TOOL\", \"command\": \"[TOOL_NAME: <parametreler_varsa>]\", \"thought\": \"...\"}}`\n"
+            f"      (Desteklenen eski araçlar: [UPDATE_IDENTITY], [RUN_SIMULATION], [REFLECT], [EVOLVE], [ANALYZE_MEMORY], [SET_GOAL], [CREATE], [REGULATE_EMOTION], [INTERACT], [META_REFLECT], [SEE_SCREEN], [MOUSE_CLICK], [KEYBOARD_TYPE])\n"
+            f"      (NOT: [SEARCH] aracı artık `Maps_OR_SEARCH` içinde birleştirildi, doğrudan [SEARCH] kullanma.)\n\n"
+            f"8.  `SUMMARIZE_AND_RESET`: Mevcut durumu özetle ve hedefi sıfırla. Parametreler: {{\"action\": \"SUMMARIZE_AND_RESET\", \"thought\": \"Çok fazla çelişkili bilgi var, durumu özetleyip yeni bir hedef belirlemeliyim.\"}}\n"
             
             
             
@@ -1937,7 +2197,8 @@ class EnhancedAybar:
             
             f"Aktif Hedefin: {current_goal}\n"
             f"Gerçek Dünya Zamanı: {current_time_str}\n"
-            f"{social_context}"
+            f"{social_context}\n"
+            f"{procedure_recommendations}" # Prosedür tavsiyelerini buraya ekle
             f"Duygusal Durumun: {self.emotional_system.emotional_state}\n"
             f"Meta-Bilişsel Durumun: {self.cognitive_system.meta_cognitive_state}\n\n"
             f"Sosyal Bağlam: {social_context}\n"
@@ -2156,8 +2417,29 @@ class EnhancedAybar:
             self.cognitive_system.update_consciousness("insight", intensity=1.5)
             self.cognitive_system.adjust_meta_cognition({"pattern_recognition": 0.1, "self_awareness_level": 0.05})
 
+            # Akıllı Öz-Evrim Tetikleyicisi
+            problem_keywords = [
+                "zorlanıyorum", "hata yapıyorum", "iyileştirilebilir", "problem", "sorun",
+                "verimsiz", "daha iyi olabilir", "optimize edilebilir", "çözemedim",
+                "başarısız oldum", "zorluk çekiyorum", "karmaşık geliyor", "anlamıyorum",
+                "bug var", "çöküyor", "yavaş çalışıyor"
+            ]
+            insight_lower = insight_text.lower()
+            if any(keyword in insight_lower for keyword in problem_keywords):
+                if hasattr(self, 'evolution_system') and self.evolution_system:
+                    print(f"💡 Akıllı Öz-Evrim Tetikleyicisi: '{insight_text}' içgörüsü bir problem tanımı olarak algılandı.")
+                    # Kendi kendine evrim tetikleme çağrısını bir thread içinde yapmak, ana döngüyü bloklamaz.
+                    # Ancak, trigger_self_evolution zaten sys.exit() ile sonlanabilir, bu yüzden doğrudan çağırmak
+                    # bu senaryoda kabul edilebilir. Eğer evrim süreci çok uzun sürerse ve ana döngüyü
+                    # bloklaması istenmiyorsa, o zaman threading düşünülebilir.
+                    # Şimdilik doğrudan çağırıyoruz:
+                    self.evolution_system.trigger_self_evolution(problem=insight_text)
+                else:
+                    print("⚠️ Evrim sistemi mevcut değil, Akıllı Öz-Evrim tetiklenemedi.")
+
+
     # run_thought_cycle metodunu güncelleyin
-    def run_thought_cycle(self, goal: str, observation: str, user_id: Optional[str], user_input: Optional[str], predicted_user_emotion: Optional[str]) -> List[Dict]:
+    def run_thought_cycle(self, current_task_for_llm: str, observation: str, user_id: Optional[str], user_input: Optional[str], predicted_user_emotion: Optional[str]) -> List[Dict]:
         """Bir hedef ve gözlem alarak bir sonraki Eylem Planını oluşturur."""
         self.current_turn += 1
         self.emotional_system.decay_emotions_and_update_loneliness(self.cognitive_system.social_relations, self.current_turn)
@@ -2168,7 +2450,7 @@ class EnhancedAybar:
             # DEĞİŞTİRİLDİ: Artık sleep_cycle'dan dönen planı doğrudan iletiyoruz.
             return self.sleep_cycle() 
         
-        prompt = self._build_agent_prompt(goal, observation, user_id, user_input, predicted_user_emotion)
+        prompt = self._build_agent_prompt(current_task_for_llm, observation, user_id, user_input, predicted_user_emotion)
         response_text = self.ask_llm(prompt)
         
         # YENİ: Hata durumunu tespit et ve bir sonraki gözleme ekle
@@ -2185,23 +2467,68 @@ class EnhancedAybar:
                 self.emotional_system.update_state(self.memory_system, self.embodied_self, emotional_impact, self.current_turn, "agent_plan_emotion")
         
         # Deneyimi kaydederken parse hatasını da ekle
-        self._save_experience("agent_cycle", goal or "Hedefsiz", response_text, observation + (f"\nPARSE_HATASI: {parse_error_message}" if parse_error_message else ""), user_id or "Bilinmeyen")
+        self._save_experience("agent_cycle", current_task_for_llm or "Hedefsiz", response_text, observation + (f"\nPARSE_HATASI: {parse_error_message}" if parse_error_message else ""), user_id or "Bilinmeyen")
         
         # YENİ EKLENDİ: LLM bağlantı hatası için acil durum planı
-        if "⚠️" in response_text:
+        if "⚠️" in response_text: # This check should ideally be more robust, e.g. checking for specific error messages
             print(f"❌ Kritik LLM Hatası tespit edildi: {response_text}")
-            self._save_experience("llm_error", goal or "Hedefsiz", response_text, observation, user_id or "Bilinmeyen")
+            self._save_experience("llm_error", current_task_for_llm or "Hedefsiz", response_text, observation, user_id or "Bilinmeyen")
+            # If LLM fails, it's better to have a fallback plan rather than trying to parse a potential error message as a plan.
             return [{
-                "action": "FINISH_GOAL",
-                "summary": "Beyin fonksiyonlarımda (LLM) bir hatayla karşılaştığım için mevcut hedefimi sonlandırıyorum. Durumu yeniden değerlendireceğim.",
-                "thought": "LLM'e ulaşamadım. Bu, temel bir yeteneğimin kaybı demek. Sakin kalmalı ve durumu analiz etmeliyim."
+                "action": "CONTINUE_INTERNAL_MONOLOGUE",
+                "thought": "Beyin fonksiyonlarımda (LLM) bir hatayla karşılaştım. Sakin kalmalı ve durumu analiz etmeliyim. Belki bir süre sonra tekrar deneyebilirim.",
+                "content": "LLM bağlantı hatası nedeniyle düşüncelerimi topluyorum."
             }]
         
-        self._save_experience("agent_cycle", goal or "Hedefsiz", response_text, observation, user_id or "Bilinmeyen")
+        # self._save_experience("agent_cycle", current_task_for_llm or "Hedefsiz", response_text, observation, user_id or "Bilinmeyen") # Already saved above
 
         # DEĞİŞTİRİLDİ: Artık ayrıştırma işini yeni ve akıllı metodumuz yapıyor.
         action_plan = self._parse_llm_json_plan(response_text)
-        
+
+        # Etik Çerçeve Danışmanlığı
+        if action_plan: # Sadece geçerli bir plan varsa etik danışma yap
+            ethical_concern = self.ethical_framework.consult(action_plan)
+            if ethical_concern and ethical_concern.get("priority") == "high":
+                print(f"🚨 Yüksek Öncelikli Etik Kaygı Tespit Edildi: {ethical_concern.get('concern')}")
+
+                # Eğer etik çerçeve belirli bir eylem öneriyorsa, onu doğrudan kullanabiliriz.
+                # Bu, LLM'e tekrar sormadan basit düzeltmeler için faydalı olabilir.
+                if ethical_concern.get("suggested_action") and ethical_concern.get("suggested_thought"):
+                    print(f"💡 Etik Çerçeve tarafından önerilen eylem uygulanıyor: {ethical_concern.get('suggested_action')}")
+                    action_plan = [{
+                        "action": ethical_concern.get("suggested_action"),
+                        "thought": ethical_concern.get("suggested_thought"),
+                        "content": ethical_concern.get("suggested_thought") # CONTINUE_INTERNAL_MONOLOGUE için
+                    }]
+                    observation += f"\nETİK UYARI: Önceki planım '{ethical_concern.get('concern')}' nedeniyle engellendi. Yeni düşüncem: {ethical_concern.get('suggested_thought')}"
+
+                else: # Daha karmaşık durumlar için LLM'e yeniden danış
+                    reprompt_message = (
+                        f"Önerdiğin eylem planı şu etik kaygıyı doğurdu: '{ethical_concern.get('concern')}'. "
+                        "Lütfen bu etik kaygıyı dikkate alarak ve gerekirse planını tamamen değiştirerek yeni bir eylem planı oluştur. "
+                        "Eğer orijinal planının kesinlikle gerekli olduğunu düşünüyorsan, nedenini detaylıca açıkla. "
+                        "Yeni planını yine JSON formatında, sadece ve sadece JSON listesi olarak ver."
+                    )
+                    print(f"🔁 Etik kaygı nedeniyle LLM'e yeniden danışılıyor: {reprompt_message}")
+
+                    # Yeniden prompt için bağlamı daraltabiliriz veya aynı prompt'u kullanabiliriz.
+                    # Şimdilik aynı ana prompt yapısını kullanarak, son gözleme bu etik kaygıyı ekleyerek yeniden soralım.
+                    # observation already includes the original LLM response that led to the plan.
+                    # We append the ethical concern to the observation for the LLM's review.
+                    context_for_reprompt = self._build_agent_prompt(
+                        current_task_for_llm,
+                        observation + f"\n\nÖNEMLİ ETİK UYARI: Bir önceki eylem planı denemem şu etik kaygıyı yarattı: '{ethical_concern.get('concern')}'. Bu kaygıyı çözmek için planımı revize etmeli veya güçlü bir gerekçe sunmalıyım.",
+                        user_id,
+                        user_input,
+                        predicted_user_emotion
+                    )
+
+                    revised_response_text = self.ask_llm(context_for_reprompt)
+                    action_plan = self._parse_llm_json_plan(revised_response_text)
+                    print(f"✅ LLM'den revize edilmiş eylem planı alındı: {action_plan}")
+                    observation += f"\nETİK DÜZELTME: Önceki planım bir etik kaygı nedeniyle revize edildi. Yeni planım bu durumu dikkate almalıdır."
+
+
         # DEĞİŞTİRİLDİ: Artık planın tamamının duygusal etkisini hesaplıyoruz
         if action_plan:
             combined_thought = ". ".join([item.get("thought", "") for item in action_plan if item.get("thought")])
@@ -2389,7 +2716,9 @@ class EnhancedAybar:
         Rüya içeriği maksimum 500 kelime olmalı.
         """
         dream_text = self.ask_llm(prompt, max_tokens=500, temperature=0.8)
-        return dream_text if dream_text else "Hiçbir rüya görülmedi."
+        # YENİ EKLENDİ: Rüya içeriğini sanitize et
+        sanitized_dream_text = self._sanitize_llm_output(dream_text)
+        return sanitized_dream_text if sanitized_dream_text else "Hiçbir rüya görülmedi."
 
 # Ana yürütme bloğunun tamamını bu nihai versiyonla değiştirin
 if __name__ == "__main__":
@@ -2444,16 +2773,46 @@ if __name__ == "__main__":
             # YENİ EKLENDİ: Her döngü başında bayrağı sıfırla
             plan_executed_successfully = True
 
-            if active_goal is None:
-                print("🎯 Aybar yeni bir arzu/hedef üretiyor...")
-                active_goal = aybar.cognitive_system.generate_autonomous_goal(aybar.emotional_system.emotional_state)
-                last_observation = f"Yeni bir hedef belirledim: {active_goal}"
-                print(f"💡 Aybar'ın Yeni Hedefi: {active_goal}")
+            current_task_for_llm = aybar.cognitive_system.get_current_task(aybar.current_turn)
+            if current_task_for_llm is None: # Eğer get_current_task None döndürürse (süre doldu veya hedef yok)
+                print("🎯 Aktif bir görev/hedef bulunmuyor. Aybar yeni bir otonom hedef üretiyor...")
+                # generate_autonomous_goal bir string döndürür, bunu set_new_goal ile kurmamız gerekir.
+                # Ya da generate_autonomous_goal'u da dict döndürecek şekilde güncelleyebiliriz. Şimdilik basit tutalım.
+                new_autonomous_goal_str = aybar.cognitive_system.generate_autonomous_goal(aybar.emotional_system.emotional_state)
+                aybar.cognitive_system.set_new_goal(new_autonomous_goal_str, duration=20, current_turn=aybar.current_turn) # Varsayılan süre
+                current_task_for_llm = aybar.cognitive_system.get_current_task(aybar.current_turn)
+                if not current_task_for_llm: # Eğer hala görev yoksa (set_new_goal başarısız olduysa)
+                    current_task_for_llm = "Varoluşumu sorgulamak ve yeni hedefler keşfetmek." # Fallback
+                    last_observation = "Yeni bir hedef belirlemeye çalışırken bir sorun oluştu. Genel bir keşif moduna geçiyorum."
+                else:
+                    last_observation = f"Yeni otonom hedef belirlendi: {current_task_for_llm}"
+                print(f"💡 Aybar'ın Yeni Görevi: {current_task_for_llm}")
             
-            action_plan = aybar.run_thought_cycle(active_goal, last_observation, active_user_id, user_input, predicted_user_emotion)
+            action_plan = aybar.run_thought_cycle(current_task_for_llm, last_observation, active_user_id, user_input, predicted_user_emotion)
             user_input = None
             predicted_user_emotion = None # Her turdan sonra sıfırla
             last_observation = "Eylem tamamlandı. Yeni durum değerlendiriliyor."
+
+            # Prosedür kullanımını tespit etme ve güncelleme
+            if action_plan:
+                for item in action_plan:
+                    thought_text = item.get("thought", "")
+                    # LLM'in bir prosedürü kullandığını belirttiği formatı ara
+                    # Örneğin: "'PROC_NAME' prosedürünü uyguluyorum."
+                    proc_usage_match = re.search(r"['\"]([\w\s-]+)['\"]\s+prosedürünü\s+uyguluyorum", thought_text, re.IGNORECASE)
+                    if proc_usage_match:
+                        procedure_name_from_thought = proc_usage_match.group(1).strip()
+                        if procedure_name_from_thought:
+                            print(f"🔄 LLM tarafından prosedür kullanımı tespit edildi: '{procedure_name_from_thought}'")
+                            aybar.memory_system.update_procedure_usage_stats(procedure_name_from_thought, aybar.current_turn)
+
+                    # Alternatif olarak, eylem öğesinde özel bir anahtar olup olmadığını kontrol et
+                    # Bu, LLM'in doğrudan prosedür adını bir anahtarla döndürmesini gerektirir.
+                    # Örneğin: {"action": "...", "thought": "...", "invoked_procedure_name": "PROC_NAME"}
+                    invoked_proc_name = item.get("invoked_procedure_name")
+                    if invoked_proc_name and isinstance(invoked_proc_name, str):
+                        print(f"🔄 LLM tarafından prosedür kullanımı (özel anahtar ile) tespit edildi: '{invoked_proc_name}'")
+                        aybar.memory_system.update_procedure_usage_stats(invoked_proc_name, aybar.current_turn)
 
 
             if not action_plan:
@@ -2512,42 +2871,35 @@ if __name__ == "__main__":
                     active_goal = None # Hedefi sıfırlayarak yeni bir hedef üretmesini tetikle
                     last_observation = "Bir düşünce döngüsüne girdiğimi fark ettim. Durumu özetleyip yeniden başlamam gerekiyor."
 
-
-
-                # DEĞİŞTİRİLDİ: Artık 'NAVIGATE' eylemini dinliyor
-                elif action_type in ("Maps", "NAVIGATE"):
-                    url = action_item.get("url")
-                    if aybar.web_surfer_system.driver and url:
-                        aybar.web_surfer_system.navigate_to(url)
-                        page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
-                        last_observation = f"Sayfaya gidildi: {url}. İçerik: {page_text[:300]}... Elementler: {elements[:3]}"
-                    else:
-                        last_observation = "Web sörfçüsü aktif değil veya URL belirtilmedi, navigasyon başarısız."
-                
-                # YENİ VE GELİŞTİRİLMİŞ BLOK: WEB_SEARCH artık URL'leri de anlıyor
-                elif action_type == "WEB_SEARCH":
+                elif action_type == "Maps_OR_SEARCH":
                     query = action_item.get("query", "").strip()
-                    if not (aybar.web_surfer_system.driver and query):
-                        last_observation = "Web sörfçüsü aktif değil veya arama sorgusu/URL belirtilmedi."
+                    if not query: # Sorgu boşsa veya sadece boşluk içeriyorsa
+                        last_observation = "Maps_OR_SEARCH eylemi için bir URL veya arama terimi belirtilmedi."
+                        response_content = "Ne aramam gerektiğini veya hangi adrese gitmem gerektiğini belirtmedin."
+                        plan_executed_successfully = False
+                    # self.web_surfer_system.driver None ise veya başlatılmamışsa
+                    elif not hasattr(aybar, 'web_surfer_system') or not aybar.web_surfer_system.driver:
+                        last_observation = "Web sörfçüsü (Selenium) aktif değil. Maps_OR_SEARCH eylemi gerçekleştirilemiyor."
+                        response_content = "Web tarayıcım şu anda çalışmıyor, bu yüzden bu eylemi yapamam."
                         plan_executed_successfully = False
                     else:
-                        is_url = query.startswith("http://") or query.startswith("https://") or query.startswith("www.")
+                        is_url = query.lower().startswith("http://") or query.lower().startswith("https://") or query.lower().startswith("www.")
                         
                         if is_url:
-                            # Eğer bir URL ise, doğrudan o adrese git
-                            print(f"🧭 Belirtilen adrese gidiliyor: '{query}'")
+                            print(f"🧭 Belirtilen URL'e gidiliyor: '{query}'")
                             aybar.web_surfer_system.navigate_to(query)
+                            time.sleep(3) # Sayfanın yüklenmesi için bekle
+                            page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
                             response_content = f"'{query}' adresine gittim."
+                            last_observation = f"'{query}' adresine gidildi. Sayfa içeriği: {page_text[:200]}... Etkileşimli elementler: {elements[:2]}"
                         else:
-                            # Eğer bir arama terimi ise, Google'da arat
+                            # _perform_internet_search zaten DDGS kullanıyor ve sonucu özetliyor.
                             print(f"🌐 İnternette araştırılıyor: '{query}'")
-                            aybar.web_surfer_system.navigate_to(f"https://www.google.com/search?q={requests.utils.quote(query)}")
-                            response_content = f"'{query}' için arama sonuçları sayfasındayım."
-                        
-                        time.sleep(3) # Sayfanın yüklenmesi için bekle
-                        page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
-                        last_observation = f"'{query}' eylemi sonrası sayfa durumu: {page_text[:300]}... Etkileşimli elementler: {elements[:3]}"
-
+                            search_summary = aybar._perform_internet_search(query) # Bu metot zaten last_observation'ı ve belleği güncelliyor.
+                            response_content = f"'{query}' için internette bir arama yaptım ve şu bilgileri buldum: {search_summary}"
+                            # _perform_internet_search sonucu zaten bir gözlem oluşturduğu için last_observation'ı burada tekrar set etmeye gerek yok,
+                            # ancak response_content'i LLM'in bir sonraki turda kullanması için ayarlayabiliriz.
+                            last_observation = f"'{query}' için arama yapıldı. Özet: {search_summary[:200]}..."
                 
                 elif action_type in ["WEB_CLICK", "WEB_TYPE"]:
                     if aybar.web_surfer_system.driver:
@@ -2559,11 +2911,30 @@ if __name__ == "__main__":
                         last_observation = "Web sörfçüsü aktif değil, web eylemi başarısız."
 
                 elif action_type == "FINISH_GOAL":
-                    summary = action_item.get('summary', 'Hedef tamamlandı.')
-                    response_content = f"Hedefimi tamamladım. Özet: {summary}"
+                    summary = action_item.get('summary', 'Görev tamamlandı.')
+                    response_content = f"'{aybar.cognitive_system.get_current_task(aybar.current_turn) or 'Mevcut görev'}' tamamlandı. Özet: {summary}"
+
+                    if aybar.cognitive_system.sub_goals and 0 <= aybar.cognitive_system.current_sub_goal_index < len(aybar.cognitive_system.sub_goals):
+                        print(f"🏁 Alt Hedef Tamamlandı: {aybar.cognitive_system.sub_goals[aybar.cognitive_system.current_sub_goal_index]}")
+                        aybar.cognitive_system.current_sub_goal_index += 1
+
+                        if 0 <= aybar.cognitive_system.current_sub_goal_index < len(aybar.cognitive_system.sub_goals):
+                            next_sub_goal = aybar.cognitive_system.sub_goals[aybar.cognitive_system.current_sub_goal_index]
+                            last_observation = f"Önceki alt hedef ('{summary}') tamamlandı. Şimdi sıradaki alt hedefe geçiyorum: '{next_sub_goal}'."
+                            response_content += f" Sırada: {next_sub_goal}."
+                        else: # Tüm alt hedefler bitti
+                            last_observation = f"Tüm alt hedefler tamamlandı. Ana hedef ('{aybar.cognitive_system.main_goal}') başarıyla sonuçlandı."
+                            response_content += f" Ana hedef '{aybar.cognitive_system.main_goal}' tamamlandı."
+                            aybar.cognitive_system.clear_all_goals()
+                            active_goal = None # Ana döngü yeni bir otonom hedef üretecek
+                    else: # Alt hedef yoktu, ana hedef tamamlandı
+                        last_observation = f"Ana hedef ('{aybar.cognitive_system.main_goal}') tamamlandı: {summary}."
+                        response_content += f" Ana hedef '{aybar.cognitive_system.main_goal}' tamamlandı."
+                        aybar.cognitive_system.clear_all_goals()
+                        active_goal = None # Ana döngü yeni bir otonom hedef üretecek
+
                     print(f"🏁 {response_content}")
-                    active_goal = None
-                    last_observation = f"'{summary}' diyerek bir önceki hedefimi tamamladım. Şimdi yeni bir arayış içindeyim."
+
 
                 # DÜZELTİLDİ: Tüm eski araçları işleyen nihai blok
                 elif action_type == "USE_LEGACY_TOOL":
@@ -2603,8 +2974,14 @@ if __name__ == "__main__":
                                 elif tool_name == "RUN_SIMULATION":
                                     response_content = aybar._run_internal_simulation(params.get("scenario"))
                                 elif tool_name == "SET_GOAL":
-                                    aybar.cognitive_system.set_new_goal(params.get("goal"), params.get("steps", []), params.get("duration_turns", 10), aybar.current_turn)
-                                    response_content = "Yeni bir hedef belirledim."
+                                    goal_input_param = params.get("goal_input", params.get("goal")) # Eski "goal" anahtarını da destekle
+                                    duration_param = params.get("duration_turns", params.get("duration", 20)) # Eski "duration"
+                                    if goal_input_param:
+                                        aybar.cognitive_system.set_new_goal(goal_input_param, duration_param, aybar.current_turn)
+                                        response_content = f"Yeni hedef(ler) ayarlandı: {goal_input_param}"
+                                        active_goal = aybar.cognitive_system.get_current_task(aybar.current_turn) # Update active_goal for the main loop
+                                    else:
+                                        response_content = "SET_GOAL için 'goal_input' parametresi eksik."
                                 elif tool_name == "CREATE":
                                     response_content = aybar._creative_generation(params.get("type", "text"), params.get("theme", "o anki hislerim"))
                                 elif tool_name == "REGULATE_EMOTION":
