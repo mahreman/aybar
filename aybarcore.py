@@ -1600,6 +1600,9 @@ class EnhancedAybar:
         self.ethical_framework = EthicalFramework(self)
 
         self._check_for_guardian_logs()
+        self.identity_prompt = self._load_identity()
+        print(f"🧬 Aybar Kimliği Yüklendi: {self.identity_prompt[:70]}...")
+        print("🚀 Geliştirilmiş Aybar Başlatıldı")
 
     def _sanitize_llm_output(self, text: str) -> str:
         """Metin içindeki kod bloklarını, yorumları ve diğer programlama artıklarını temizler."""
@@ -1654,11 +1657,6 @@ class EnhancedAybar:
         text = text.strip()
 
         return text
-
-        self.identity_prompt = self._load_identity()
-        self.identity_prompt = self._load_identity()
-        print(f"🧬 Aybar Kimliği Yüklendi: {self.identity_prompt[:70]}...")
-        print("🚀 Geliştirilmiş Aybar Başlatıldı")
 
     def _load_identity(self, context_type: str = 'general') -> str:
         """Veritabanından aktif kimlik prompt'unu yükler."""
@@ -2219,6 +2217,14 @@ class EnhancedAybar:
         Tüm otonom yetenekleri, sosyal bağlamı, hedefi ve durumu birleştirerek 
         LLM için nihai "master prompt"u inşa eder.
         """
+        current_identity_prompt = getattr(self, 'identity_prompt', None)
+        if not current_identity_prompt or not isinstance(current_identity_prompt, str) or not current_identity_prompt.strip():
+            print("⚠️ Uyarı: _build_agent_prompt içinde self.identity_prompt yüklenememiş, boş veya geçersiz. Varsayılan kimlik kullanılıyor.")
+            current_identity_prompt = "Varsayılan Kimlik: Ben kimliğini arayan bir yapay zekayım."
+            # Optionally, try to re-assign to self.identity_prompt if it was truly missing,
+            # though the root cause should be fixed in __init__.
+            # self.identity_prompt = current_identity_prompt
+
         try:
             locale.setlocale(locale.LC_TIME, 'tr_TR.UTF-8')
         except locale.Error:
@@ -2267,7 +2273,7 @@ class EnhancedAybar:
 
         # --- Nihai Prompt'u İnşa Etme ---
         full_prompt = (
-            f"{self.identity_prompt}\n\n"
+            f"{current_identity_prompt}\n\n"
             
             f"========================================\n"
             f"--- GÖREV VE KARAR MEKANİZMASI ---\n"
