@@ -9,7 +9,7 @@ import datetime
 import json
 
 # Yönetilecek ana betiğin adı
-MAIN_SCRIPT = "aybarcore.py"
+MAIN_SCRIPT = "aybar_core6.py"
 # Arka planda çalışacak servislerin adları
 HARDWARE_API_SCRIPT = "hardware_api.py"
 VISION_SENSOR_SCRIPT = "vision_sensor.py"
@@ -103,11 +103,12 @@ if __name__ == "__main__":
                     
                     backup = backup_script(current_script)
                     if os.path.exists(new_script_path):
-                        # Önce eski betiği sil, sonra yenisini taşı
-                        if os.path.exists(current_script):
-                            os.remove(current_script)
+                        # shutil.move, hedef dosya varsa üzerine yazar (atomik olarak veya değil, OS'e bağlı)
+                        # Bu nedenle os.remove(current_script) genellikle gereksizdir ve yarış koşuluna neden olabilir.
                         shutil.move(new_script_path, current_script)
                         print(f"✅ Yeni versiyon '{current_script}' olarak atandı. Aybar yeniden başlatılıyor...")
+                    else:
+                        print(f"⚠️ Evrim hedefi olan yeni script '{new_script_path}' bulunamadı. Evrim iptal edildi.")
                     
                     aybar_process.kill() 
                     break

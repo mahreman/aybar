@@ -164,16 +164,18 @@ class SpeakerSystem:
     """Metni, duygusal duruma göre farklı seslerle sese dönüştürür."""
     def __init__(self, config: Config):
         self.config = config
+        self.client = None # İstemciyi başlangıçta None olarak ayarla
         try:
             # API anahtarını ortam değişkenlerinden güvenli bir şekilde al
-            #api_key = os.getenv("ELEVENLABS_API_KEY")
-            api_key = "sk_abd025de949665cae6a25fd4275f57885496f4ddca333659"
-            #api_key = os.getenv("sk_abd025de949665cae6a25fd4275f57885496f4ddca333659")
+            api_key = os.getenv("ELEVENLABS_API_KEY")
+            
             if not api_key:
-                raise ValueError("ElevenLabs API anahtarını kod içine ekleyin.")
-            
-            self.client = ElevenLabs(api_key=api_key)
-            
+                print("⚠️ ElevenLabs API anahtarı 'ELEVENLABS_API_KEY' ortam değişkeninde bulunamadı veya boş. Sesli özellikler devre dışı bırakılıyor.")
+                # self.client zaten None olduğu için tekrar None atamaya gerek yok.
+            else:
+                self.client = ElevenLabs(api_key=api_key)
+                print("🔊 Duygusal Konuşma Motoru (ElevenLabs) API anahtarı ile başarıyla yüklendi.")
+
             # Farklı duygusal durumlar için farklı ses kimlikleri (Voice ID)
             # Bu ID'leri ElevenLabs'ın Voice Library'sinden seçebilirsiniz.
             self.voice_map = {
@@ -183,10 +185,15 @@ class SpeakerSystem:
                 "existential_anxiety": "ZsYcqahfiS2dy4J6XYC5", # Drew (Fısıltılı ve düşünceli)
                 "curiosity": "2EiwWnXFnvU5JabPnv8n" # Clyde (Canlı ve enerjik)
             }
-            print("🔊 Duygusal Konuşma Motoru (ElevenLabs) başarıyla yüklendi.")
+            # Bu log sadece client başarılı bir şekilde başlatıldıysa yazdırılmalı.
+            # if self.client:
+            #     print("🔊 Duygusal Konuşma Motoru (ElevenLabs) ses haritası başarıyla yüklendi.")
 
+        except ValueError as ve: # API anahtarı eksikse ValueError oluşabilir (ElevenLabs kütüphanesinden)
+            print(f"⚠️ Konuşma motoru (ElevenLabs) başlatılırken değer hatası: {ve}. Sesli özellikler devre dışı.")
+            self.client = None
         except Exception as e:
-            print(f"⚠️ Konuşma motoru (ElevenLabs) başlatılamadı: {e}. Sesli özellikler devre dışı.")
+            print(f"⚠️ Konuşma motoru (ElevenLabs) başlatılırken genel bir hata oluştu: {e}. Sesli özellikler devre dışı.")
             self.client = None
 
     def speak(self, text: str, emotional_state: Dict):
@@ -1481,7 +1488,7 @@ class CognitiveSystem:
                 print(f"🏁 Tüm alt hedefler tamamlandı. Ana hedef ('{self.main_goal}') de tamamlanmış sayılıyor.")
                 self.clear_all_goals()
                 return None
-            
+
             print(f"🎯 Aktif Ana Görev: {self.main_goal}")
             return self.main_goal
 
@@ -2770,6 +2777,33 @@ if __name__ == "__main__":
             session_id = active_user_id or "Otonom Düşünce"
             print(f"\n===== TUR {aybar.current_turn + 1}/{aybar.config.MAX_TURNS} (Oturum: {session_id}) =====")
             
+            # Periyodik/Duruma Bağlı Öz-Yansıma ve Evrim Tetikleyicisi
+            if aybar.current_turn > 0 and \
+               (aybar.current_turn % 25 == 0 or aybar.emotional_system.emotional_state.get('confusion', 0) > 7.0):
+                print(f"🧠 Aybar ({aybar.current_turn}. tur) periyodik/duruma bağlı öz-yansıma ve potansiyel evrim için değerlendiriliyor...")
+
+                problems_identified = None
+                if hasattr(aybar, 'run_self_reflection'):
+                    problems_identified = aybar.run_self_reflection()
+                else:
+                    print("⚠️ Uyarı: `aybar.run_self_reflection()` metodu bulunamadı.")
+
+                if problems_identified:
+                    selected_problem = problems_identified[0] # Basitlik için ilk problemi seç
+
+                    print(f"🧬 Öz-yansıma sonucu evrim tetikleniyor. Problem: {selected_problem}")
+                    if hasattr(aybar, 'evolution_system') and hasattr(aybar.evolution_system, 'trigger_self_evolution'):
+                        # trigger_self_evolution sys.exit() çağırabilir, bu yüzden bu son eylemlerden biri olmalı.
+                        # Eğer evrim başarılı olursa, guardian.py süreci yeniden başlatacak.
+                        aybar.evolution_system.trigger_self_evolution(problem=selected_problem)
+                        # Eğer trigger_self_evolution sys.exit() ile çıkmazsa (örn. test modunda), döngü devam edebilir.
+                        # Bu durumda, bir sonraki turda devam etmek için bir işaretleyici gerekebilir veya olduğu gibi bırakılabilir.
+                    else:
+                        print("⚠️ Uyarı: `aybar.evolution_system.trigger_self_evolution()` metodu bulunamadı.")
+                else:
+                    print("🧐 Öz-yansıma sonucu evrimi tetikleyecek bir problem bulunamadı.")
+
+
             # YENİ EKLENDİ: Her döngü başında bayrağı sıfırla
             plan_executed_successfully = True
 
