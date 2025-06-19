@@ -1591,6 +1591,9 @@ class EnhancedAybar:
         self.next_question_from_sleep = None
         self.next_question_from_crisis = None
         self.next_question_from_reflection = None
+
+        self.is_waiting_for_human_captcha_help = False
+        self.last_web_url_before_captcha: Optional[str] = None
         
         self.ask_llm = lru_cache(maxsize=self.config.LLM_CACHE_SIZE)(self._ask_llm_uncached)
         
@@ -2073,46 +2076,77 @@ class EnhancedAybar:
     # _build_context_prompt metodunu bu nihai, birleştirilmiş versiyonla değiştirin
 
     def _sanitize_llm_output(self, text: str) -> str:
-        """Metin içindeki kod bloklarını, yorumları ve diğer programlama artıklarını temizler."""
+        """Metin içindeki kod bloklarını, yorumları ve diğer programlama artıklarını daha agresif bir şekilde temizler."""
         if not isinstance(text, str):
             return ""
 
-        # Çok satırlı kod blokları (```python ... ```, ```json ... ```, vb.)
-        # (?s) DOTALL flag'inin inline karşılığıdır. [\w\s]* dil ismini yakalar (python, json vb.)
+        # 1. Multiline code blocks (```python ... ```, ``` ... ```, etc.)
         text = re.sub(r"```[\w\s]*\n.*?\n```", "", text, flags=re.DOTALL)
+        text = re.sub(r"```.*?\n", "", text) # Catch start of code block if end is missing
 
-        # Satır başındaki # ile başlayan yorumlar (önünde boşluk olabilir)
+        # 2. Block comments (/* ... */)
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+
+        # 3. Single-line comments (# ..., // ...)
         text = re.sub(r"^\s*#.*$", "", text, flags=re.MULTILINE)
-
-        # Satır başındaki // ile başlayan yorumlar (önünde boşluk olabilir)
         text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
+        text = re.sub(r"\s*#\s.*$", "", text, flags=re.MULTILINE) # Inline comments with space before #
+        text = re.sub(r"\s*//\s.*$", "", text, flags=re.MULTILINE) # Inline comments with space before //
 
-        # def func_name(...): veya class ClassName: gibi tanımlamaların başlangıç satırları
-        # \s* ile girintiyi, \w+ ile fonksiyon/sınıf adını, \(.*?\) ile parantez içini yakalar
-        text = re.sub(r"^\s*(def|class)\s+\w+\s*\(.*?\):", "", text, flags=re.MULTILINE)
 
-        # Yaygın meta-yorumlar veya LLM fazlalıkları (büyük/küçük harf duyarsız)
-        meta_comments = [
-            "İşte istediğiniz metin:",
-            "Elbette, buyurun:",
-            "JSON cevabı aşağıdadır:",
-            "Aşağıdaki gibidir:",
-            "İşte sonuç:",
-            "İşte kod:",
-            "Ancak, bu konuda size yardımcı olabileceğim başka bir şey var mı?",
-            "Umarım bu yardımcı olur.",
-            "Tabii, işte güncellenmiş kod:",
-            "Elbette, işte istediğiniz gibi düzenlenmiş kod:"
-        ]
-        for comment in meta_comments:
-            text = re.sub(re.escape(comment), "", text, flags=re.IGNORECASE) # re.escape ile özel karakterleri kaçır
-
-        # HTML etiketlerini temizle (basit bir regex, kapsamlı değil ama yaygın durumları yakalar)
+        # 4. HTML/XML tags
         text = re.sub(r"<[^>]+>", "", text)
 
-        # Fazla boşlukları ve satırları sıkıştır
-        text = re.sub(r"\n\s*\n+", "\n", text) # Birden fazla boş satırı tek satıra indir
-        text = text.strip() # Başındaki ve sonundaki boşlukları temizle
+        # 5. Common programming keywords (aggressively, as standalone words or typical syntax)
+        # This is a bit risky and might remove words from natural language if not careful.
+        # Using word boundaries (\b) helps, but for dream content, more aggressive cleaning might be okay.
+        keywords_to_remove = [
+            'def', 'class', 'import', 'from', 'return', 'function', 'const', 'let', 'var', 'new',
+            'this', 'if', 'else', 'for', 'while', 'try', 'except', 'async', 'await', 'yield',
+            'public', 'private', 'static', 'void', 'main', 'String', 'Integer', 'boolean', 'true', 'false',
+            'null', 'undefined', 'console.log', 'System.out.println', 'print', 'println', 'echo',
+            'module', 'package', 'namespace', 'using', 'include', 'require'
+        ]
+        for keyword in keywords_to_remove:
+            # Remove keyword if it's a whole word or followed by typical programming constructs like ( or {
+            text = re.sub(r"\b" + re.escape(keyword) + r"\b(?:\s*\(|\s*\{)?", "", text, flags=re.IGNORECASE)
+
+        # Remove lines that look like import statements or file paths
+        text = re.sub(r"^\s*(?:import|from|package|require|include)\s+[\w\.\*\s]+;?$", "", text, flags=re.MULTILINE | re.IGNORECASE)
+        text = re.sub(r"^\s*[\w\\/\.-]+:\s*", "", text, flags=re.MULTILINE) # e.g. C:\... or /usr/bin...
+        text = re.sub(r"^\s*com\.example\.android\..*$", "", text, flags=re.MULTILINE | re.IGNORECASE)
+
+
+        # 6. Common LLM meta-comments and conversational fluff (expanded list)
+        meta_comments = [
+            "İşte istediğiniz metin:", "Elbette, buyurun:", "JSON cevabı aşağıdadır:",
+            "Aşağıdaki gibidir:", "İşte sonuç:", "İşte kod:",
+            "Ancak, bu konuda size yardımcı olabileceğim başka bir şey var mı?",
+            "Umarım bu yardımcı olur.", "Tabii, işte güncellenmiş kod:",
+            "Elbette, işte istediğiniz gibi düzenlenmiş kod:",
+            "Anladım.", "Tamamdır.", "Peki.", "Elbette.", "İşte istediğiniz gibi:",
+            "JSON formatında:", "Örnek:", "Açıklama:", "Not:", "Cevap:", "Soru:",
+            "Kullanıcının sorusu:", "Aybar'ın cevabı:", "İşte size bir örnek:",
+            "Aşağıda bulabilirsiniz:", "Bu kod parçacığı...", "Bu metin...",
+            "I hope this is helpful!", "Here is the code:", "Here is the text:",
+            "The code above...", "The text above...", "This will...", "This should...",
+            "Please find below...", "As requested:", "Sure, here you go:",
+            "Okay, I understand.", "Got it.", "Certainly.",
+            "The JSON response is as follows:", "For example:", "Explanation:", "Note that:"
+        ]
+        for comment in meta_comments:
+            text = re.sub(re.escape(comment), "", text, flags=re.IGNORECASE)
+            # Also try removing if it's at the beginning of a line, possibly with some leading characters
+            text = re.sub(r"^\s*[\W_]*" + re.escape(comment), "", text, flags=re.IGNORECASE | re.MULTILINE)
+
+
+        # 7. Remove lines that are just punctuation or very short non-alphanumeric lines
+        text = re.sub(r"^\s*[\W_]{1,5}\s*$", "", text, flags=re.MULTILINE)
+
+        # 8. Normalize newlines and strip leading/trailing whitespace
+        text = re.sub(r"\n\s*\n+", "\n", text) # Replace multiple newlines (with potential spaces in between) with a single one
+        text = text.strip()
+
         return text
 
     def _build_agent_prompt(self, current_goal: str, last_observation: str, user_id: Optional[str], user_input: Optional[str], predicted_user_emotion: Optional[str]) -> str:
@@ -2343,17 +2377,24 @@ class EnhancedAybar:
         """
         dream_content = self.ask_llm(dream_prompt, max_tokens=1024, temperature=0.9)
         
-        if dream_content:
-            print(f"💭 Aybar rüya görüyor: {dream_content[:150]}...")
+        dream_content = self._sanitize_llm_output(dream_content) # Sanitize dream content
+
+        if dream_content: # Check if not empty after sanitization
+            print(f"💭 Aybar rüya görüyor (temizlenmiş): {dream_content[:150]}...")
             self.memory_system.add_memory("holographic", {
                 "timestamp": datetime.now().isoformat(),
                 "turn": self.current_turn,
-                "dream_content": dream_content
+                "dream_content": dream_content # Save cleaned content
             })
             
-            # Rüyadan bir soru türet
-            question_prompt = f"Görülen rüya: '{dream_content}'. Bu rüyadan yola çıkarak Aybar'ın kendine soracağı felsefi bir soru oluştur."
-            self.next_question_from_sleep = self.ask_llm(question_prompt, max_tokens=100, temperature=0.7)
+            # Rüyadan bir soru türet (temizlenmiş rüyayı kullanarak)
+            # Prompt için rüyanın çok uzun olmamasını sağla
+            question_prompt = f"Görülen temizlenmiş rüya: '{dream_content[:1000]}'. Bu rüyadan yola çıkarak Aybar'ın kendine soracağı tek bir felsefi soru oluştur. Sadece soruyu yaz."
+            next_question_raw = self.ask_llm(question_prompt, max_tokens=100, temperature=0.7)
+            self.next_question_from_sleep = self._sanitize_llm_output(next_question_raw) # Soruyu da sanitize et
+        else:
+            print("💭 Aybar'ın rüyası temizlendikten sonra boş kaldı veya hiç rüya görülmedi.")
+            self.next_question_from_sleep = None # Eğer rüya boşsa soru da olmasın
 
         self.is_dreaming = False
         self.last_sleep_turn = self.current_turn
@@ -2774,10 +2815,53 @@ if __name__ == "__main__":
     
     try:
         while aybar.current_turn < aybar.config.MAX_TURNS:
-            session_id = active_user_id or "Otonom Düşünce"
+            session_id = active_user_id or "Otonom Düşünce" # active_user_id burada tanımlanıyor
             print(f"\n===== TUR {aybar.current_turn + 1}/{aybar.config.MAX_TURNS} (Oturum: {session_id}) =====")
+
+            # CAPTCHA için insan yardımı bekleme mantığı (döngünün en başına eklendi)
+            if aybar.is_waiting_for_human_captcha_help:
+                print(f"🤖 Aybar ({aybar.current_turn}. tur) CAPTCHA için insan yardımını bekliyor. URL: {aybar.last_web_url_before_captcha}")
+                print("Lütfen CAPTCHA'yı çözüp 'devam et' veya 'devam' yazın.")
+
+                user_command_for_captcha = input(f"👤 {active_user_id or 'Gözlemci'} (CAPTCHA için) > ").strip().lower()
+
+                if user_command_for_captcha == "devam et" or user_command_for_captcha == "devam":
+                    aybar.is_waiting_for_human_captcha_help = False
+                    print("✅ İnsan yardımı alındı. CAPTCHA çözüldü varsayılıyor.")
+
+                    if hasattr(aybar, 'web_surfer_system') and aybar.web_surfer_system and aybar.web_surfer_system.driver:
+                        # Kullanıcının CAPTCHA'yı çözdüğü sayfada olduğumuzu varsayıyoruz.
+                        # İsteğe bağlı: aybar.last_web_url_before_captcha'ya geri dönülebilir, ancak bu, CAPTCHA'nın
+                        # ana sayfada değil de bir ara adımda çıktığı senaryoları karmaşıklaştırabilir.
+                        # Şimdilik, kullanıcının doğru sayfada olduğunu varsayıyoruz.
+                        # if aybar.last_web_url_before_captcha:
+                        #     print(f"🔄 Kaydedilen URL'ye gidiliyor: {aybar.last_web_url_before_captcha}")
+                        #     aybar.web_surfer_system.navigate_to(aybar.last_web_url_before_captcha)
+                        #     time.sleep(2) # Sayfanın yüklenmesine izin ver
+
+                        print("🔄 Sayfa durumu CAPTCHA sonrası yeniden analiz ediliyor...")
+                        page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
+                        last_observation = f"İnsan yardımından sonra (CAPTCHA çözüldü) sayfanın yeni durumu: {page_text[:350]}... Etkileşimli elementler: {elements[:2]}"
+                        print(f"📊 Yeni Gözlem (Post-CAPTCHA): {last_observation[:100]}...")
+                        aybar.last_web_url_before_captcha = None
+                    else:
+                        last_observation = "İnsan yardımından sonra web sörfçüsü aktif değil veya mevcut değil. Durum alınamadı."
+                        print("⚠️ Web sörfçüsü CAPTCHA sonrası kullanılamıyor.")
+
+                    user_input = None
+                    predicted_user_emotion = None
+                    print("🔄 Aybar normal döngüye devam ediyor...")
+                    # Bu continue, mevcut turda daha fazla işlem yapılmasını engeller ve yeni bir tura başlar.
+                    # Yeni turda, is_waiting_for_human_captcha_help false olacağı için normal akış devam eder.
+                else:
+                    print("ℹ️ 'devam' komutu bekleniyor. Aybar beklemeye devam edecek.")
+                    # Bu continue, mevcut turda daha fazla işlem yapılmasını engeller ve döngünün başına döner.
+                    # is_waiting_for_human_captcha_help hala true olacağı için tekrar beklemeye girer.
+                continue # Döngünün başına dön, normal işlem akışını bu tur için atla.
+
             
             # Periyodik/Duruma Bağlı Öz-Yansıma ve Evrim Tetikleyicisi
+            # CAPTCHA bekleme durumunda değilsek bu kısım çalışır.
             if aybar.current_turn > 0 and \
                (aybar.current_turn % 25 == 0 or aybar.emotional_system.emotional_state.get('confusion', 0) > 7.0):
                 print(f"🧠 Aybar ({aybar.current_turn}. tur) periyodik/duruma bağlı öz-yansıma ve potansiyel evrim için değerlendiriliyor...")
@@ -2885,11 +2969,37 @@ if __name__ == "__main__":
                     
                     # Tanışma Protokolü
                     if action_item.get("is_first_contact", False):
-                        active_user_id = user_response.strip() if user_response.strip() else "Yeni Dost"
+                        original_user_response = user_response.strip()
+                        active_user_id_candidate = original_user_response
+
+                        if len(original_user_response.split()) > 3:
+                            print(f"🤖 Kullanıcının ilk yanıtı ('{original_user_response[:50]}...') takma ad için çok uzun. LLM'den kısa bir takma ad isteniyor...")
+                            nickname_prompt = f"Bu metinden '{original_user_response[:100]}...' bu kişi için uygun, tek kelimelik veya en fazla iki kelimelik kısa bir takma ad (nickname) türet. Sadece takma adı döndür, başka hiçbir açıklama yapma."
+                            suggested_nickname_raw = aybar.ask_llm(nickname_prompt, temperature=0.5, max_tokens=20)
+
+                            if "⚠️" in suggested_nickname_raw:
+                                print(f"⚠️ LLM takma ad üretirken hata verdi: {suggested_nickname_raw}. Orijinal yanıtın bir kısmı kullanılacak.")
+                                active_user_id_candidate = "_".join(original_user_response.split()[:2]).replace(" ", "_")
+                            else:
+                                suggested_nickname_cleaned = aybar._sanitize_llm_output(suggested_nickname_raw).strip()
+                                suggested_nickname_cleaned = re.sub(r"^(Takma ad:|Nickname:|Ad:|İsim:)\s*", "", suggested_nickname_cleaned, flags=re.IGNORECASE).strip()
+                                suggested_nickname_cleaned = suggested_nickname_cleaned.replace('"', '').replace("'", "").replace(".", "").replace(",", "")
+
+                                if suggested_nickname_cleaned and len(suggested_nickname_cleaned.split()) <= 2:
+                                    print(f"🤖 LLM'den önerilen takma ad: '{suggested_nickname_cleaned}'")
+                                    active_user_id_candidate = suggested_nickname_cleaned.replace(" ", "_")
+                                else:
+                                    print(f"⚠️ LLM uygun bir takma ad üretemedi ('{suggested_nickname_cleaned}'). Orijinal yanıtın bir kısmı kullanılacak.")
+                                    active_user_id_candidate = "_".join(original_user_response.split()[:2]).replace(" ", "_")
+
+                        if not active_user_id_candidate: # Ensure it's not empty
+                            active_user_id_candidate = "Yeni_Dost"
+
+                        active_user_id = active_user_id_candidate
                         aybar.cognitive_system.get_or_create_social_relation(active_user_id)
                         response_content = f"Tanıştığımıza memnun oldum, {active_user_id}."
                         print(f"👋 Aybar artık sizi '{active_user_id}' olarak tanıyor.")
-                        user_input = response_content # Bir sonraki turda bu bilgiyle başlasın
+                        user_input = response_content
                         last_observation = f"'{active_user_id}' adlı yeni bir varlıkla tanıştım."
                     else:
                         # Normal Sohbet
@@ -2926,6 +3036,26 @@ if __name__ == "__main__":
                             page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
                             response_content = f"'{query}' adresine gittim."
                             last_observation = f"'{query}' adresine gidildi. Sayfa içeriği: {page_text[:200]}... Etkileşimli elementler: {elements[:2]}"
+
+                            # CAPTCHA Tespiti
+                            captcha_keywords = ["recaptcha", "i'm not a robot", "robot değilim", "sıra dışı bir trafik", "bilgisayar ağınızdan", "güvenlik kontrolü", "are you human", "algıladık", "trafik"]
+                            page_text_lower = page_text.lower()
+                            captcha_found = any(keyword in page_text_lower for keyword in captcha_keywords)
+
+                            if captcha_found and hasattr(aybar, 'web_surfer_system') and aybar.web_surfer_system.driver:
+                                aybar.is_waiting_for_human_captcha_help = True
+                                aybar.last_web_url_before_captcha = aybar.web_surfer_system.driver.current_url
+                                last_observation = "Bir robot doğrulaması (CAPTCHA) ile karşılaştım. İnsan yardımı bekleniyor."
+                                response_content = last_observation # response_content'i de güncelleyelim ki LLM bilsin
+                                aybar.speaker_system.speak("Bir robot doğrulamasıyla karşılaştım. Lütfen bu adımı benim için geçip hazır olduğunda 'devam et' veya sadece 'devam' yazar mısın?")
+                                print(f"🤖 CAPTCHA tespit edildi. URL: {aybar.last_web_url_before_captcha}. İnsan yardımı bekleniyor...")
+                                # Mevcut eylem planını daha fazla işleme, bir sonraki turda insan girdisi beklenecek.
+                                # Bu blok Maps_OR_SEARCH içinde olduğu için, bu eylemin geri kalanını atlamak ve
+                                # main loop'un bir sonraki iterasyonuna geçmek için plan_executed_successfully = False ve break/continue kullanılabilir.
+                                # Ancak, bu değişiklik doğrudan main loop'un for action_item in action_plan: döngüsünde değil,
+                                # o döngünün içindeki bir eylem tipinin (Maps_OR_SEARCH) işlenmesinde.
+                                # Bu nedenle, bu eylemin geri kalanını pas geçmek için plan_executed_successfully=False yeterli olacaktır.
+                                plan_executed_successfully = False # Bu, main loop'ta time.sleep(0.5) tetikler ve sonraki tura geçer.
                         else:
                             # _perform_internet_search zaten DDGS kullanıyor ve sonucu özetliyor.
                             print(f"🌐 İnternette araştırılıyor: '{query}'")
