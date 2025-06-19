@@ -9,7 +9,7 @@ import datetime
 import json
 
 # Yönetilecek ana betiğin adı
-MAIN_SCRIPT = "aybar_core6.py"
+MAIN_SCRIPT = "aybarcore.py"
 # Arka planda çalışacak servislerin adları
 HARDWARE_API_SCRIPT = "hardware_api.py"
 VISION_SENSOR_SCRIPT = "vision_sensor.py"
