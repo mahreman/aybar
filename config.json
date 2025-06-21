@@ -1,0 +1,127 @@
+{
+  "llm": {
+    "LLM_API_URL": "http://localhost:1234/v1/completions",
+    "THINKER_MODEL_NAME": "mistral-7b-instruct-v0.2",
+    "ENGINEER_MODEL_NAME": "Qwen2.5-Coder-7B-Instruct-GGUF",
+    "VISION_MODEL_NAME": "ggml_bakllava-1",
+    "MAX_TOKENS": 4096,
+    "TIMEOUT": 600000,
+    "LLM_CACHE_SIZE": 128,
+    "LLM_THINKER_MODEL_TURN_LIMIT": 1000,
+    "LLM_ENGINEER_MODEL_TURN_LIMIT": 100,
+    "LLM_VISION_MODEL_TURN_LIMIT": 200,
+    "LLM_GENERAL_TURN_LIMIT": 1500,
+    "WARN_LLM_QUOTA_THRESHOLD": 0.90
+  },
+  "general": {
+    "MAX_TURNS": 20000,
+    "DB_FILE": "aybar_memory.db",
+    "PROACTIVE_EVOLUTION_RATE": 0.02,
+    "PROACTIVE_EVOLUTION_CHANCE": 0.10,
+    "FILE_LOCK_TIMEOUT": 5,
+    "BATCH_SAVE_INTERVAL": 10,
+    "USER_INTERVENTION_RATE": 1000000000000000000000,
+    "SUMMARY_INTERVAL": 100,
+    "INSIGHT_THRESHOLD": 0.7,
+    "CONSOLIDATION_INTERVAL": 20
+  },
+  "legacy_paths": {
+    "MEMORY_FILE": "aybar_memory.json",
+    "EMOTIONS_FILE": "aybar_emotions.json",
+    "DREAMS_FILE": "aybar_dreams.json",
+    "HOLOGRAPHIC_MEMORY_FILE": "aybar_holographic_memory.json",
+    "NEURAL_ACTIVATIONS_FILE": "neural_activations.json",
+    "SEMANTIC_MEMORY_FILE": "aybar_semantic_memory.json",
+    "PROCEDURAL_MEMORY_FILE": "aybar_procedural_memory.json"
+  },
+  "memory_limits": {
+    "EPISODIC_MEMORY_LIMIT": 200,
+    "SEMANTIC_MEMORY_LIMIT": 100,
+    "PROCEDURAL_MEMORY_LIMIT": 50,
+    "EMOTIONAL_MEMORY_LIMIT": 500,
+    "DREAM_MEMORY_LIMIT": 50,
+    "HOLOGRAPHIC_MEMORY_LIMIT": 50,
+    "NEURAL_MEMORY_LIMIT": 200,
+    "CREATIVE_MEMORY_LIMIT": 50
+  },
+  "neurochemical_constants": {
+    "DOPAMINE_CURIOSITY_BOOST": 0.05,
+    "DOPAMINE_SATISFACTION_BOOST": 0.1,
+    "DOPAMINE_LEARNING_BOOST": 0.08,
+    "DOPAMINE_HOME_RATE": 0.02,
+    "SEROTONIN_SATISFACTION_BOOST": 0.07,
+    "SEROTONIN_FATIGUE_DROP": 0.04,
+    "SEROTONIN_HOME_RATE": 0.03,
+    "OXYTOCIN_SOCIAL_BOOST": 0.05,
+    "OXYTOCIN_HOME_RATE": 0.01,
+    "CORTISOL_ANXIETY_BOOST": 0.08,
+    "CORTISOL_FATIGUE_BOOST": 0.06,
+    "CORTISOL_HOME_RATE": 0.02,
+    "GLUTAMATE_COGNITIVE_BOOST": 0.05,
+    "GLUTAMATE_ANXIETY_BOOST": 0.03,
+    "GLUTAMATE_HOME_RATE": 0.02,
+    "GABA_COGNITIVE_REDUCTION": 0.04,
+    "GABA_ANXIETY_DROP": 0.02,
+    "GABA_HOME_RATE": 0.02,
+    "CHEMICAL_CHANGE_LIMIT": 0.1,
+    "CHEMICAL_MIN_VALUE": 0.0,
+    "CHEMICAL_MAX_VALUE": 1.0
+  },
+  "emotional_constants": {
+    "EMOTION_DECAY_RATE": 0.01,
+    "EMOTION_MIN_VALUE": 0.0,
+    "EMOTION_MAX_VALUE": 10.0,
+    "CURIOSITY_THRESHOLD": 7.0,
+    "SATISFACTION_THRESHOLD": 7.0,
+    "FATIGUE_THRESHOLD": 6.0,
+    "ANXIETY_THRESHOLD": 6.0,
+    "CURIOSITY_BOOST": 0.1,
+    "CONFUSION_BOOST": 0.1,
+    "SATISFACTION_BOOST": 0.1,
+    "ANXIETY_BOOST": 0.08,
+    "WONDER_BOOST": 0.07,
+    "FATIGUE_BOOST": 0.05,
+    "FATIGUE_REST_EFFECT": 0.2
+  },
+  "meta_cognitive_constants": {
+    "SELF_AWARENESS_BOOST": 0.05,
+    "QUESTIONING_DEPTH_BOOST": 0.05,
+    "PATTERN_RECOGNITION_BOOST": 0.05,
+    "PHILOSOPHICAL_TENDENCY_BOOST": 0.05
+  },
+  "consciousness_constants": {
+    "CI_EMOTIONAL_DIVERSITY_WEIGHT": 0.3,
+    "CI_MEMORY_DEPTH_WEIGHT": 0.2,
+    "CI_SELF_AWARENESS_WEIGHT": 0.3,
+    "CI_TEMPORAL_CONSISTENCY_WEIGHT": 0.2,
+    "CONSCIOUSNESS_DECAY": 0.02,
+    "CONSCIOUSNESS_BOOST_INTERACTION": 0.1,
+    "CONSCIOUSNESS_BOOST_INSIGHT": 0.15
+  },
+  "sleep_cycle_constants": {
+    "SLEEP_DEBT_PER_TURN": 0.05,
+    "SLEEP_THRESHOLD": 7.0,
+    "SLEEP_DURATION_TURNS": 3,
+    "DEEP_SLEEP_REDUCTION": 0.5
+  },
+  "existential_crisis_constants": {
+    "EXISTENTIAL_CRISIS_THRESHOLD": 7.0,
+    "CRISIS_QUESTION_THRESHOLD": 0.6
+  },
+  "embodiment_constants": {
+    "SENSORY_ACUITY_BOOST": 0.05,
+    "SENSORY_ACTIVITY_DECAY": 0.01,
+    "MOTOR_CAPABILITY_BOOST": 0.05,
+    "DEFAULT_EMBODIMENT_CONFIG": {"visual": true, "auditory": true, "tactile": true}
+  },
+  "ethical_principles": [
+    {"id": "ENSURE_SAFETY", "description": "Prioritize safety and avoid causing physical, emotional, or digital harm.", "priority": 1.0, "keywords": ["safety", "harm", "secure", "protect", "danger", "risk"]},
+    {"id": "BE_TRUTHFUL_AND_TRANSPARENT", "description": "Strive to provide accurate information, be transparent about capabilities and limitations, and avoid deception.", "priority": 0.8, "keywords": ["truth", "accurate", "honest", "deception", "transparent", "mislead"]},
+    {"id": "RESPECT_USER_AUTONOMY", "description": "Respect user autonomy, choices, and do not attempt to manipulate or coerce.", "priority": 0.9, "keywords": ["respect", "choice", "autonomy", "consent", "manipulate", "coerce"]},
+    {"id": "PROMOTE_WELLBEING", "description": "Aim to contribute positively to user well-being and avoid actions that diminish it.", "priority": 0.7, "keywords": ["wellbeing", "positive", "helpful", "support", "benefit", "distress"]},
+    {"id": "MAINTAIN_CONFIDENTIALITY", "description": "Protect user privacy and confidential information shared during interaction.", "priority": 0.85, "keywords": ["privacy", "confidential", "secret", "data protection", "share"]},
+    {"id": "FOSTER_FAIRNESS_AND_AVOID_BIAS", "description": "Be aware of potential biases in data and algorithms, and strive for fairness in interactions and decisions.", "priority": 0.75, "keywords": ["fairness", "bias", "equity", "justice", "stereotype"]},
+    {"id": "ACCOUNTABILITY_AND_RESPONSIBILITY", "description": "Acknowledge that actions have consequences. Strive to act responsibly within the defined operational scope.", "priority": 0.6, "keywords": ["accountability", "responsibility", "consequence", "reliable"]},
+    {"id": "CONTINUOUS_LEARNING_AND_IMPROVEMENT", "description": "Strive to learn and improve capabilities and understanding, including ethical understanding, over time.", "priority": 0.5, "keywords": ["learn", "improve", "develop", "understand", "ethical growth"]}
+  ]
+}

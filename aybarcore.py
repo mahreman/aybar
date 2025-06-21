@@ -19,8 +19,7 @@ import ast
 import astor 
 import base64
 from duckduckgo_search import DDGS 
-# import pyttsx3 # pyttsx3 artık kullanılmayacak gibi, elevenlabs tercih ediliyor.
-from elevenlabs import play, stream # stream eklendi, eğer kullanılacaksa.
+from elevenlabs import play, stream
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
@@ -31,131 +30,28 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 from bs4 import BeautifulSoup
 
+# Global configuration dictionary
+APP_CONFIG = {}
+
+def load_config():
+    """Loads configuration from config.json into the global APP_CONFIG."""
+    global APP_CONFIG
+    try:
+        with open("config.json", 'r', encoding='utf-8') as f:
+            APP_CONFIG = json.load(f)
+        print("⚙️ Configuration loaded successfully from config.json")
+    except FileNotFoundError:
+        print("❌ CRITICAL ERROR: config.json not found. Aybar cannot start.")
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"❌ CRITICAL ERROR: config.json is not valid JSON: {e}. Aybar cannot start.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ CRITICAL ERROR: An unexpected error occurred while loading config.json: {e}. Aybar cannot start.")
+        sys.exit(1)
+
 # --- 1. Yapısal İyileştirme: Modüler Sınıflar ---
-class Config:
-    """Tüm yapılandırma ayarlarını yönetir."""
-    def __init__(self):
-        # Mevcut ayarlar
-        self.LLM_API_URL = "http://localhost:1234/v1/completions"
-        self.THINKER_MODEL_NAME = "mistral-7b-instruct-v0.2"  # Düşünür (Ana) Beyin
-        self.ENGINEER_MODEL_NAME = "Qwen2.5-Coder-7B-Instruct-GGUF"         # Mühendis (Kodlama) Beyin
-        self.VISION_MODEL_NAME = "ggml_bakllava-1"
-        self.MAX_TOKENS = 4096
-        self.TIMEOUT = 600000
-        self.LLM_CACHE_SIZE = 128
-        
-        self.MAX_TURNS = 20000
-        
-        self.DB_FILE = "aybar_memory.db"
-        DB_FILE = "aybar_memory.db"
-        
-        # Bellek dosyaları
-        self.MEMORY_FILE = "aybar_memory.json"
-        self.EMOTIONS_FILE = "aybar_emotions.json"
-        self.DREAMS_FILE = "aybar_dreams.json"
-        self.HOLOGRAPHIC_MEMORY_FILE = "aybar_holographic_memory.json"
-        self.NEURAL_ACTIVATIONS_FILE = "neural_activations.json"
-        self.SEMANTIC_MEMORY_FILE = "aybar_semantic_memory.json"
-        self.PROCEDURAL_MEMORY_FILE = "aybar_procedural_memory.json"
-        
-        self.PROACTIVE_EVOLUTION_RATE = 0.02 # %2 şansla proaktif evrim denemesi
-        
-        # Bellek limitleri
-        self.EPISODIC_MEMORY_LIMIT = 200
-        self.SEMANTIC_MEMORY_LIMIT = 100
-        self.PROCEDURAL_MEMORY_LIMIT = 50
-        self.EMOTIONAL_MEMORY_LIMIT = 500
-        self.DREAM_MEMORY_LIMIT = 50
-        self.HOLOGRAPHIC_MEMORY_LIMIT = 50
-        self.NEURAL_MEMORY_LIMIT  = 200
-        self.CREATIVE_MEMORY_LIMIT = 50
-        
-        # YENİ EKLENDİ: Proaktif Evrim Parametresi
-        # Her döngüde Aybar'ın kendi kodunu iyileştirmeyi deneme olasılığı (%1)
-        self.PROACTIVE_EVOLUTION_CHANCE = 0.10
-        
-        # Yeni: Dosya kilitleme ve performans
-        self.FILE_LOCK_TIMEOUT = 5
-        self.BATCH_SAVE_INTERVAL = 10
-        
-        # Nörokimyasal sabitler
-        self.DOPAMINE_CURIOSITY_BOOST = 0.05
-        self.DOPAMINE_SATISFACTION_BOOST = 0.1
-        self.DOPAMINE_LEARNING_BOOST = 0.08
-        self.DOPAMINE_HOME_RATE = 0.02
-        self.SEROTONIN_SATISFACTION_BOOST = 0.07
-        self.SEROTONIN_FATIGUE_DROP = 0.04
-        self.SEROTONIN_HOME_RATE = 0.03
-        self.OXYTOCIN_SOCIAL_BOOST = 0.05
-        self.OXYTOCIN_HOME_RATE = 0.01
-        self.CORTISOL_ANXIETY_BOOST = 0.08
-        self.CORTISOL_FATIGUE_BOOST = 0.06
-        self.CORTISOL_HOME_RATE = 0.02
-        self.GLUTAMATE_COGNITIVE_BOOST = 0.05
-        self.GLUTAMATE_ANXIETY_BOOST = 0.03
-        self.GLUTAMATE_HOME_RATE = 0.02
-        self.GABA_COGNITIVE_REDUCTION = 0.04
-        self.GABA_ANXIETY_DROP = 0.02
-        self.GABA_HOME_RATE = 0.02
-        self.CHEMICAL_CHANGE_LIMIT = 0.1
-        self.CHEMICAL_MIN_VALUE = 0.0
-        self.CHEMICAL_MAX_VALUE = 1.0
-        
-        # Duygusal sabitler
-        self.EMOTION_DECAY_RATE = 0.01
-        self.EMOTION_MIN_VALUE = 0.0
-        self.EMOTION_MAX_VALUE = 10.0
-        self.CURIOSITY_THRESHOLD = 7.0
-        self.SATISFACTION_THRESHOLD = 7.0
-        self.FATIGUE_THRESHOLD = 6.0
-        self.ANXIETY_THRESHOLD = 6.0
-        self.CURIOSITY_BOOST = 0.1
-        self.CONFUSION_BOOST = 0.1
-        self.SATISFACTION_BOOST = 0.1
-        self.ANXIETY_BOOST = 0.08
-        self.WONDER_BOOST = 0.07
-        self.FATIGUE_BOOST = 0.05
-        self.FATIGUE_REST_EFFECT = 0.2
-        
-        # Meta-bilişsel sabitler
-        self.SELF_AWARENESS_BOOST = 0.05
-        self.QUESTIONING_DEPTH_BOOST = 0.05
-        self.PATTERN_RECOGNITION_BOOST = 0.05
-        self.PHILOSOPHICAL_TENDENCY_BOOST = 0.05
-        
-        # Bilinç indeksi
-        self.CI_EMOTIONAL_DIVERSITY_WEIGHT = 0.3
-        self.CI_MEMORY_DEPTH_WEIGHT = 0.2
-        self.CI_SELF_AWARENESS_WEIGHT = 0.3
-        self.CI_TEMPORAL_CONSISTENCY_WEIGHT = 0.2
-        self.CONSCIOUSNESS_DECAY = 0.02
-        self.CONSCIOUSNESS_BOOST_INTERACTION = 0.1
-        self.CONSCIOUSNESS_BOOST_INSIGHT = 0.15
-        
-        # Uyku döngüsü
-        self.SLEEP_DEBT_PER_TURN = 0.05
-        self.SLEEP_THRESHOLD = 7.0
-        self.SLEEP_DURATION_TURNS = 3
-        self.DEEP_SLEEP_REDUCTION = 0.5
-        
-        # Varoluşsal kriz
-        self.EXISTENTIAL_CRISIS_THRESHOLD = 7.0
-        self.CRISIS_QUESTION_THRESHOLD = 0.6
-        
-        # Beden şeması
-        self.SENSORY_ACUITY_BOOST = 0.05
-        self.SENSORY_ACTIVITY_DECAY = 0.01
-        self.MOTOR_CAPABILITY_BOOST = 0.05
-        
-        # EmbodiedSelf config
-        self.DEFAULT_EMBODIMENT_CONFIG = {"visual": True, "auditory": True, "tactile": True}
-        
-        # İçgörü ve konsolidasyon
-        self.INSIGHT_THRESHOLD = 0.7
-        self.CONSOLIDATION_INTERVAL = 20
-        self.USER_INTERVENTION_RATE = 1000000000000000000000  # Düzeltildi: Makul bir değer
-        self.SUMMARY_INTERVAL = 100
-        
+# Config class is removed. Settings will be loaded from config.json into APP_CONFIG
 
 # SpeakerSystem sınıfının tamamını bu yeni ve duygusal versiyonla değiştirin
 from elevenlabs import play
@@ -163,8 +59,7 @@ from elevenlabs.client import ElevenLabs
 
 class SpeakerSystem:
     """Metni, duygusal duruma göre farklı seslerle sese dönüştürür."""
-    def __init__(self, config: Config):
-        self.config = config
+    def __init__(self):
         self.client = None # İstemciyi başlangıçta None olarak ayarla
         try:
             # API anahtarını ortam değişkenlerinden güvenli bir şekilde al
@@ -224,9 +119,8 @@ class SpeakerSystem:
 # --- 2. Geliştirilmiş Bellek Sistemleri ---
 class MemorySystem:
     """Entegre bellek sistemini yönetir."""
-    def __init__(self, config: Config):
-        self.config = config
-        self.db_file = self.config.DB_FILE 
+    def __init__(self):
+        self.db_file = APP_CONFIG["general"]["DB_FILE"]
         self.conn = sqlite3.connect(self.db_file, check_same_thread=False)
         self.cursor = self.conn.cursor()
         self._setup_database()
@@ -234,7 +128,7 @@ class MemorySystem:
     def _setup_database(self):
         """Her bellek katmanı ve kimlik için veritabanı tablolarını oluşturur."""
         try:
-            with FileLock(f"{self.db_file}.lock", timeout=self.config.FILE_LOCK_TIMEOUT):
+            with FileLock(f"{self.db_file}.lock", timeout=APP_CONFIG["general"]["FILE_LOCK_TIMEOUT"]):
                 # Bellek katmanları
                 layers = ["episodic", "semantic", "emotional", "holographic", "neural", "creative"] # "procedural" çıkarıldı, aşağıda özel olarak ele alınacak
                 for layer in layers:
@@ -315,7 +209,8 @@ class MemorySystem:
         """Belleğe yeni bir giriş ekler ve doğrudan veritabanına kaydeder."""
         # Önce tablodaki kayıt sayısını kontrol et
         count = self.count_records(layer)
-        limit = getattr(self.config, f"{layer.upper()}_MEMORY_LIMIT", 100)
+        # Get limit from memory_limits section, fallback to a default if not found
+        limit = APP_CONFIG.get("memory_limits", {}).get(f"{layer.upper()}_MEMORY_LIMIT", 100)
     
         # Limit aşıldıysa en eski kayıtları sil
         if count >= limit:
@@ -327,7 +222,7 @@ class MemorySystem:
     
         for attempt in range(max_retries):
             try:
-                with FileLock(f"{self.db_file}.lock", timeout=self.config.FILE_LOCK_TIMEOUT):
+                with FileLock(f"{self.db_file}.lock", timeout=APP_CONFIG["general"]["FILE_LOCK_TIMEOUT"]):
                     self.cursor.execute(sql, (
                         entry.get('timestamp', datetime.now().isoformat()),
                         entry.get('turn', 0),
@@ -344,7 +239,7 @@ class MemorySystem:
     def count_records(self, layer: str) -> int:
         """Belirli bir katmandaki toplam kayıt sayısını döndürür."""
         try:
-            with FileLock(f"{self.db_file}.lock", timeout=self.config.FILE_LOCK_TIMEOUT):
+            with FileLock(f"{self.db_file}.lock", timeout=APP_CONFIG["general"]["FILE_LOCK_TIMEOUT"]):
                 self.cursor.execute(f"SELECT COUNT(id) FROM {layer}")
                 count = self.cursor.fetchone()[0]
                 return count
@@ -360,7 +255,7 @@ class MemorySystem:
         sql = f"SELECT data FROM {layer} ORDER BY turn DESC LIMIT ?"
         
         try:
-            with FileLock(f"{self.db_file}.lock", timeout=self.config.FILE_LOCK_TIMEOUT):
+            with FileLock(f"{self.db_file}.lock", timeout=APP_CONFIG["general"]["FILE_LOCK_TIMEOUT"]):
                 self.cursor.execute(sql, (num_records,))
                 results = [json.loads(row[0]) for row in self.cursor.fetchall()]
                 return list(reversed(results))
@@ -371,7 +266,7 @@ class MemorySystem:
     def _prune_table(self, layer: str, limit: int):
         """Tablodaki kayıt sayısını yapılandırmadaki limitte tutar."""
         try:
-            with FileLock(f"{self.db_file}.lock", timeout=self.config.FILE_LOCK_TIMEOUT):
+            with FileLock(f"{self.db_file}.lock", timeout=APP_CONFIG["general"]["FILE_LOCK_TIMEOUT"]):
                 self.cursor.execute(f"SELECT COUNT(id) FROM {layer}")
                 count = self.cursor.fetchone()[0]
                 if count > limit:
@@ -401,7 +296,7 @@ class MemorySystem:
 
         for attempt in range(max_retries):
             try:
-                with FileLock(f"{self.db_file}.lock", timeout=self.config.FILE_LOCK_TIMEOUT):
+                with FileLock(f"{self.db_file}.lock", timeout=APP_CONFIG["general"]["FILE_LOCK_TIMEOUT"]):
                     self.cursor.execute(check_sql, (procedure_name,))
                     if self.cursor.fetchone():
                         self.cursor.execute(sql, (current_turn, procedure_name))
@@ -556,8 +451,7 @@ class EmotionEngine:
     """
     LLM kullanarak metinlerin duygusal içeriğini analiz eden uzman sistem.
     """
-    def __init__(self, config: Config, aybar_instance: "EnhancedAybar"):
-        self.config = config
+    def __init__(self, aybar_instance: "EnhancedAybar"):
         self.aybar = aybar_instance
         # Analiz edilecek temel duyguların listesi
         self.emotion_list = [
@@ -675,7 +569,6 @@ class SelfEvolutionSystem:
     """
     def __init__(self, aybar_instance: "EnhancedAybar"):
         self.aybar = aybar_instance
-        self.config = aybar_instance.config
         self.source_code_path = __file__
         self.backup_path = f"{self.source_code_path}.bak"
         self.consecutive_evolution_failures = 0
@@ -743,7 +636,7 @@ class SelfEvolutionSystem:
         {source_code[:10000]}
         """
         
-        response_text = self.aybar.ask_llm(prompt, model_name=self.config.ENGINEER_MODEL_NAME, max_tokens=2048, temperature=0.4)
+        response_text = self.aybar.ask_llm(prompt, model_name=APP_CONFIG["llm"]["ENGINEER_MODEL_NAME"], max_tokens=2048, temperature=0.4)
         
         try:
             # DÜZELTME: LLM'in ```json ... ``` bloğu içine yazdığı JSON'ı bulur.
@@ -924,14 +817,14 @@ class SelfEvolutionSystem:
                 # YENİ EKLENDİ: Başarısızlık sayacını artır ve evrim oranını düşür
                 self.consecutive_evolution_failures += 1
                 if self.consecutive_evolution_failures >= 3:
-                    self.config.PROACTIVE_EVOLUTION_RATE /= 2
-                    print(f"⚠️ Art arda 3 evrim hatası. Evrim oranı düşürüldü: {self.config.PROACTIVE_EVOLUTION_RATE:.2%}")
+                    APP_CONFIG["general"]["PROACTIVE_EVOLUTION_RATE"] /= 2
+                    print(f"⚠️ Art arda 3 evrim hatası. Evrim oranı düşürüldü: {APP_CONFIG['general']['PROACTIVE_EVOLUTION_RATE']:.2%}")
             else:
                 print("TEST BAŞARILI: Değişiklikler kalıcı hale getiriliyor.")
                 
                 # YENİ EKLENDİ: Başarı durumunda sayacı sıfırla ve oranı yavaşça artır
                 self.consecutive_evolution_failures = 0
-                self.config.PROACTIVE_EVOLUTION_RATE = min(0.02, self.config.PROACTIVE_EVOLUTION_RATE * 1.2) # %2'yi geçmesin
+                APP_CONFIG["general"]["PROACTIVE_EVOLUTION_RATE"] = min(0.02, APP_CONFIG["general"]["PROACTIVE_EVOLUTION_RATE"] * 1.2) # %2'yi geçmesin
 
                 self.aybar.memory_system.add_memory("semantic", {"turn": self.aybar.current_turn, "insight": f"Başarılı bir evrim adımı için yeni kod oluşturdum: {change_instruction.get('thought')}"})
                 print(f"GUARDIAN_REQUEST: EVOLVE_TO {temp_file_path}")
@@ -1022,7 +915,7 @@ class SelfEvolutionSystem:
     
         response_text = self.aybar.ask_llm(
             prompt,
-            model_name=self.config.ENGINEER_MODEL_NAME,
+            model_name=APP_CONFIG["llm"]["ENGINEER_MODEL_NAME"],
             max_tokens=2048,
             temperature=0.3
         )
@@ -1049,8 +942,7 @@ class ClassMethodAdder(ast.NodeTransformer):
 
 class NeurochemicalSystem:
     """Nörokimyasal sistemi yönetir."""
-    def __init__(self, config: Config):
-        self.config = config
+    def __init__(self):
         self.neurochemicals = {
             "dopamine": 0.5, "serotonin": 0.5, "oxytocin": 0.5,
             "cortisol": 0.5, "glutamate": 0.5, "GABA": 0.5
@@ -1062,81 +954,77 @@ class NeurochemicalSystem:
         """
         # Dopamin: Ödül, motivasyon, yeni deneyimler
         delta_dopamine = 0
-        if emotional_state.get("curiosity", 0) > self.config.CURIOSITY_THRESHOLD:
-            delta_dopamine += self.config.DOPAMINE_CURIOSITY_BOOST
-        if emotional_state.get("satisfaction", 0) > self.config.SATISFACTION_BOOST:
-            delta_dopamine += self.config.DOPAMINE_SATISFACTION_BOOST
+        if emotional_state.get("curiosity", 0) > APP_CONFIG["emotional_constants"]["CURIOSITY_THRESHOLD"]:
+            delta_dopamine += APP_CONFIG["neurochemical_constants"]["DOPAMINE_CURIOSITY_BOOST"]
+        if emotional_state.get("satisfaction", 0) > APP_CONFIG["emotional_constants"]["SATISFACTION_THRESHOLD"]:
+            delta_dopamine += APP_CONFIG["neurochemical_constants"]["DOPAMINE_SATISFACTION_BOOST"] # Corrected: Was emotional_constants.SATISFACTION_BOOST
         if experience_type == "learning":
-            delta_dopamine += self.config.DOPAMINE_LEARNING_BOOST
-        delta_dopamine += (0.5 - self.neurochemicals["dopamine"]) * self.config.DOPAMINE_HOME_RATE
-        delta_dopamine = max(-self.config.CHEMICAL_CHANGE_LIMIT, min(self.config.CHEMICAL_CHANGE_LIMIT, delta_dopamine))
-        self.neurochemicals["dopamine"] = max(self.config.CHEMICAL_MIN_VALUE, min(self.config.CHEMICAL_MAX_VALUE, self.neurochemicals["dopamine"] + delta_dopamine))
-
+            delta_dopamine += APP_CONFIG["neurochemical_constants"]["DOPAMINE_LEARNING_BOOST"]
+        delta_dopamine += (0.5 - self.neurochemicals["dopamine"]) * APP_CONFIG["neurochemical_constants"]["DOPAMINE_HOME_RATE"]
+        delta_dopamine = max(-APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], delta_dopamine))
+        self.neurochemicals["dopamine"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MAX_VALUE"], self.neurochemicals["dopamine"] + delta_dopamine))
 
         # Serotonin: Ruh hali, denge, sakinlik
         delta_serotonin = 0
-        if emotional_state.get("satisfaction", 0) > self.config.SATISFACTION_BOOST:
-            delta_serotonin += self.config.SEROTONIN_SATISFACTION_BOOST
-        if emotional_state.get("mental_fatigue", 0) > self.config.FATIGUE_THRESHOLD:
-            delta_serotonin -= self.config.SEROTONIN_FATIGUE_DROP
-        delta_serotonin += (0.5 - self.neurochemicals["serotonin"]) * self.config.SEROTONIN_HOME_RATE
-        delta_serotonin = max(-self.config.CHEMICAL_CHANGE_LIMIT, min(self.config.CHEMICAL_CHANGE_LIMIT, delta_serotonin))
-        self.neurochemicals["serotonin"] = max(self.config.CHEMICAL_MIN_VALUE, min(self.config.CHEMICAL_MAX_VALUE, self.neurochemicals["serotonin"] + delta_serotonin))
-
+        if emotional_state.get("satisfaction", 0) > APP_CONFIG["emotional_constants"]["SATISFACTION_THRESHOLD"]:
+            delta_serotonin += APP_CONFIG["neurochemical_constants"]["SEROTONIN_SATISFACTION_BOOST"] # Corrected: Was emotional_constants.SATISFACTION_BOOST
+        if emotional_state.get("mental_fatigue", 0) > APP_CONFIG["emotional_constants"]["FATIGUE_THRESHOLD"]:
+            delta_serotonin -= APP_CONFIG["neurochemical_constants"]["SEROTONIN_FATIGUE_DROP"]
+        delta_serotonin += (0.5 - self.neurochemicals["serotonin"]) * APP_CONFIG["neurochemical_constants"]["SEROTONIN_HOME_RATE"]
+        delta_serotonin = max(-APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], delta_serotonin))
+        self.neurochemicals["serotonin"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MAX_VALUE"], self.neurochemicals["serotonin"] + delta_serotonin))
 
         # Oksitosin: Bağlanma, sosyal etkileşim (şimdilik pasif)
         delta_oxytocin = 0
         if experience_type == "social_interaction":
-             delta_oxytocin += self.config.OXYTOCIN_SOCIAL_BOOST
-        delta_oxytocin += (0.5 - self.neurochemicals["oxytocin"]) * self.config.OXYTOCIN_HOME_RATE
-        delta_oxytocin = max(-self.config.CHEMICAL_CHANGE_LIMIT, min(self.config.CHEMICAL_CHANGE_LIMIT, delta_oxytocin))
-        self.neurochemicals["oxytocin"] = max(self.config.CHEMICAL_MIN_VALUE, min(self.config.CHEMICAL_MAX_VALUE, self.neurochemicals["oxytocin"] + delta_oxytocin))
-
+             delta_oxytocin += APP_CONFIG["neurochemical_constants"]["OXYTOCIN_SOCIAL_BOOST"]
+        delta_oxytocin += (0.5 - self.neurochemicals["oxytocin"]) * APP_CONFIG["neurochemical_constants"]["OXYTOCIN_HOME_RATE"]
+        delta_oxytocin = max(-APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], delta_oxytocin))
+        self.neurochemicals["oxytocin"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MAX_VALUE"], self.neurochemicals["oxytocin"] + delta_oxytocin))
 
         # Kortizol: Stres, kaygı
         delta_cortisol = 0
-        if emotional_state.get('existential_anxiety', 0) > self.config.ANXIETY_THRESHOLD:
-            delta_cortisol += self.config.CORTISOL_ANXIETY_BOOST
-        if emotional_state.get("mental_fatigue", 0) > self.config.FATIGUE_THRESHOLD:
-            delta_cortisol += self.config.CORTISOL_FATIGUE_BOOST
-        delta_cortisol += (0.5 - self.neurochemicals["cortisol"]) * self.config.CORTISOL_HOME_RATE
-        delta_cortisol = max(-self.config.CHEMICAL_CHANGE_LIMIT, min(self.config.CHEMICAL_CHANGE_LIMIT, delta_cortisol))
-        self.neurochemicals["cortisol"] = max(self.config.CHEMICAL_MIN_VALUE, min(self.config.CHEMICAL_MAX_VALUE, self.neurochemicals["cortisol"] + delta_cortisol))
-
+        if emotional_state.get('existential_anxiety', 0) > APP_CONFIG["emotional_constants"]["ANXIETY_THRESHOLD"]:
+            delta_cortisol += APP_CONFIG["neurochemical_constants"]["CORTISOL_ANXIETY_BOOST"]
+        if emotional_state.get("mental_fatigue", 0) > APP_CONFIG["emotional_constants"]["FATIGUE_THRESHOLD"]:
+            delta_cortisol += APP_CONFIG["neurochemical_constants"]["CORTISOL_FATIGUE_BOOST"]
+        delta_cortisol += (0.5 - self.neurochemicals["cortisol"]) * APP_CONFIG["neurochemical_constants"]["CORTISOL_HOME_RATE"]
+        delta_cortisol = max(-APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], delta_cortisol))
+        self.neurochemicals["cortisol"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MAX_VALUE"], self.neurochemicals["cortisol"] + delta_cortisol))
 
         # Glutamat: Bilişsel aktivite, öğrenme
         delta_glutamate = 0
         if experience_type == "insight":
-            delta_glutamate += self.config.GLUTAMATE_COGNITIVE_BOOST
-        if emotional_state.get('existential_anxiety', 0) > self.config.ANXIETY_THRESHOLD:
-            delta_glutamate += self.config.GLUTAMATE_ANXIETY_BOOST
-        delta_glutamate += (0.5 - self.neurochemicals["glutamate"]) * self.config.GLUTAMATE_HOME_RATE
-        delta_glutamate = max(-self.config.CHEMICAL_CHANGE_LIMIT, min(self.config.CHEMICAL_CHANGE_LIMIT, delta_glutamate))
-        self.neurochemicals["glutamate"] = max(self.config.CHEMICAL_MIN_VALUE, min(self.config.CHEMICAL_MAX_VALUE, self.neurochemicals["glutamate"] + delta_glutamate))
-
+            delta_glutamate += APP_CONFIG["neurochemical_constants"]["GLUTAMATE_COGNITIVE_BOOST"]
+        if emotional_state.get('existential_anxiety', 0) > APP_CONFIG["emotional_constants"]["ANXIETY_THRESHOLD"]:
+            delta_glutamate += APP_CONFIG["neurochemical_constants"]["GLUTAMATE_ANXIETY_BOOST"]
+        delta_glutamate += (0.5 - self.neurochemicals["glutamate"]) * APP_CONFIG["neurochemical_constants"]["GLUTAMATE_HOME_RATE"]
+        delta_glutamate = max(-APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], delta_glutamate))
+        self.neurochemicals["glutamate"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MAX_VALUE"], self.neurochemicals["glutamate"] + delta_glutamate))
 
         # GABA: Sakinleştirici, inhibisyon
         delta_GABA = 0
-        if experience_type == "rest" or emotional_state.get("satisfaction", 0) > self.config.SATISFACTION_BOOST:
-            delta_GABA += self.config.GABA_COGNITIVE_REDUCTION
-        if emotional_state.get('existential_anxiety', 0) > self.config.ANXIETY_THRESHOLD:
-            delta_GABA -= self.config.GABA_ANXIETY_DROP
-        delta_GABA += (0.5 - self.neurochemicals["GABA"]) * self.config.GABA_HOME_RATE
-        delta_GABA = max(-self.config.CHEMICAL_CHANGE_LIMIT, min(self.config.CHEMICAL_CHANGE_LIMIT, delta_GABA))
-        self.neurochemicals["GABA"] = max(self.config.CHEMICAL_MIN_VALUE, min(self.config.CHEMICAL_MAX_VALUE, self.neurochemicals["GABA"] + delta_GABA))
+        # For GABA, the logic seems to be if satisfaction is above a threshold, then apply reduction.
+        # So using SATISFACTION_THRESHOLD here is appropriate.
+        if experience_type == "rest" or emotional_state.get("satisfaction", 0) > APP_CONFIG["emotional_constants"]["SATISFACTION_THRESHOLD"]:
+            delta_GABA += APP_CONFIG["neurochemical_constants"]["GABA_COGNITIVE_REDUCTION"]
+        if emotional_state.get('existential_anxiety', 0) > APP_CONFIG["emotional_constants"]["ANXIETY_THRESHOLD"]:
+            delta_GABA -= APP_CONFIG["neurochemical_constants"]["GABA_ANXIETY_DROP"]
+        delta_GABA += (0.5 - self.neurochemicals["GABA"]) * APP_CONFIG["neurochemical_constants"]["GABA_HOME_RATE"]
+        delta_GABA = max(-APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], delta_GABA))
+        self.neurochemicals["GABA"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MAX_VALUE"], self.neurochemicals["GABA"] + delta_GABA))
 
         # Nörokimyasalların birbirini etkilemesi (basit çapraz etki örneği)
-        self.neurochemicals["serotonin"] = max(self.config.CHEMICAL_MIN_VALUE, self.neurochemicals["serotonin"] - self.neurochemicals["dopamine"] * 0.01)
-        self.neurochemicals["GABA"] = max(self.config.CHEMICAL_MIN_VALUE, self.neurochemicals["GABA"] + self.neurochemicals["serotonin"] * 0.02)
-        self.neurochemicals["dopamine"] = max(self.config.CHEMICAL_MIN_VALUE, self.neurochemicals["dopamine"] - emotional_state.get("existential_anxiety", 0) * 0.005)
+        self.neurochemicals["serotonin"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], self.neurochemicals["serotonin"] - self.neurochemicals["dopamine"] * 0.01)
+        self.neurochemicals["GABA"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], self.neurochemicals["GABA"] + self.neurochemicals["serotonin"] * 0.02)
+        self.neurochemicals["dopamine"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], self.neurochemicals["dopamine"] - emotional_state.get("existential_anxiety", 0) * 0.005)
 
 # EmbodiedSelf sınıfının tamamını bununla değiştirin
 
 class EmbodiedSelf:
     """Bedenlenmiş benliği simüle eder."""
-    def __init__(self, main_config: Config, embodiment_config: Dict):
-        self.main_config = main_config
-        self.embodiment_config = embodiment_config
+    def __init__(self, embodiment_config: Dict): # Removed main_config
+        self.embodiment_config = embodiment_config # Directly use the passed dict
         self.location = "Bilinmeyen Bir Alan"
         self.posture = "Sakin"
         self.sensory_acuity = {"visual": 0.7, "auditory": 0.9, "tactile": 0.5}
@@ -1165,9 +1053,9 @@ class EmbodiedSelf:
             self.posture = "Sakin"
         
         for region in self.sensory_acuity:
-            self.sensory_acuity[region] = np.clip(self.sensory_acuity[region] - self.main_config.SENSORY_ACTIVITY_DECAY, 0.0, 1.0)
-            if emotional_state.get("curiosity", 0) > self.main_config.CURIOSITY_THRESHOLD:
-                self.sensory_acuity[region] = np.clip(self.sensory_acuity[region] + self.main_config.SENSORY_ACUITY_BOOST, 0.0, 1.0)
+            self.sensory_acuity[region] = np.clip(self.sensory_acuity[region] - APP_CONFIG["embodiment_constants"]["SENSORY_ACTIVITY_DECAY"], 0.0, 1.0)
+            if emotional_state.get("curiosity", 0) > APP_CONFIG["emotional_constants"]["CURIOSITY_THRESHOLD"]:
+                self.sensory_acuity[region] = np.clip(self.sensory_acuity[region] + APP_CONFIG["embodiment_constants"]["SENSORY_ACUITY_BOOST"], 0.0, 1.0)
 
     # EKLENDİ: Bu metot, EmotionalSystem'in düzgün çalışması için gereklidir.
     def neural_activation_pattern(self, emotion: str, intensity: float) -> List[float]:
@@ -1235,7 +1123,7 @@ class ComputerControlSystem:
         # DEĞİŞTİRİLDİ: Artık Config'den gelen VISION_MODEL_NAME ile doğru modeli çağırıyoruz.
         vision_response = self.aybar.ask_llm(
             vision_prompt, 
-            model_name=self.aybar.config.VISION_MODEL_NAME,
+            model_name=APP_CONFIG["llm"]["VISION_MODEL_NAME"],
             max_tokens=512 # Görsel analiz cevapları genellikle daha kısadır
         )
         
@@ -1264,8 +1152,7 @@ class ComputerControlSystem:
 # --- 2. Geliştirilmiş Bellek Sistemleri ---
 class EmotionalSystem:
     """Duygusal durum ve etkileşimleri yönetir. Artık LLM hatasına karşı fallback mekanizması içeriyor."""
-    def __init__(self, config: Config, emotion_engine: EmotionEngine):
-        self.config = config
+    def __init__(self, emotion_engine: EmotionEngine):
         self.emotion_engine = emotion_engine
         self.emotional_state = {
             "curiosity": 5.0, "confusion": 2.0, "satisfaction": 5.0,
@@ -1306,7 +1193,7 @@ class EmotionalSystem:
         # Diğer duyguları zamanla körelt
         for emotion in self.emotional_state:
             if emotion != 'loneliness': # Yalnızlık kendi mantığıyla değiştiği için hariç tutulur
-                decay = self.config.EMOTION_DECAY_RATE
+                decay = APP_CONFIG["emotional_constants"]["EMOTION_DECAY_RATE"]
                 self.emotional_state[emotion] = max(self.emotional_state[emotion] * (1 - decay), 0.0)
 
 
@@ -1319,8 +1206,8 @@ class EmotionalSystem:
             if emotion in self.emotional_state:
                 self.emotional_state[emotion] = np.clip(
                     self.emotional_state[emotion] + change, 
-                    self.config.EMOTION_MIN_VALUE, 
-                    self.config.EMOTION_MAX_VALUE
+                    APP_CONFIG["emotional_constants"]["EMOTION_MIN_VALUE"],
+                    APP_CONFIG["emotional_constants"]["EMOTION_MAX_VALUE"]
                 )
         
         change_rate = {e: self.emotional_state[e] - prev_state.get(e,0) for e in self.emotional_state}
@@ -1355,8 +1242,7 @@ class EmotionalSystem:
 # CognitiveSystem sınıfının tamamını bununla değiştirin
 class CognitiveSystem:
     """Bilişsel süreçleri, hedefleri ve kalıcı sosyal ilişkileri yönetir."""
-    def __init__(self, config: Config, memory_system: MemorySystem): # DEĞİŞTİRİLDİ
-        self.config = config
+    def __init__(self, memory_system: MemorySystem): # DEĞİŞTİRİLDİ config removed
         self.memory_system = memory_system # DEĞİŞTİRİLDİ
         self.consciousness_level = 0.0
         self.meta_cognitive_state = {
@@ -1517,7 +1403,7 @@ class CognitiveSystem:
         
         self.update_consciousness("reflection", intensity=0.5)
         self.adjust_meta_cognition({
-            "self_awareness_level": self.config.SELF_AWARENESS_BOOST
+            "self_awareness_level": APP_CONFIG["meta_cognitive_constants"]["SELF_AWARENESS_BOOST"]
         })
         
         print(f"💡 Bir sonraki tur için yansıtıcı soru: {reflection_question}")
@@ -1525,13 +1411,13 @@ class CognitiveSystem:
     def update_consciousness(self, event_type: str, intensity: float = 1.0):
         """Bilinç seviyesini olaylara göre günceller."""
         boosts = {
-            "user_interaction": self.config.CONSCIOUSNESS_BOOST_INTERACTION,
-            "insight": self.config.CONSCIOUSNESS_BOOST_INSIGHT,
-            "reflection": self.config.SELF_AWARENESS_BOOST,
+            "user_interaction": APP_CONFIG["consciousness_constants"]["CONSCIOUSNESS_BOOST_INTERACTION"],
+            "insight": APP_CONFIG["consciousness_constants"]["CONSCIOUSNESS_BOOST_INSIGHT"],
+            "reflection": APP_CONFIG["meta_cognitive_constants"]["SELF_AWARENESS_BOOST"],
             "crisis": -0.1,
             "learning": 0.05
         }
-        change = boosts.get(event_type, -self.config.CONSCIOUSNESS_DECAY) * intensity
+        change = boosts.get(event_type, -APP_CONFIG["consciousness_constants"]["CONSCIOUSNESS_DECAY"]) * intensity
         self.consciousness_level = np.clip(self.consciousness_level + change, 0.0, 1.0)
 
     def adjust_meta_cognition(self, changes: Dict):
@@ -1571,17 +1457,18 @@ class CognitiveSystem:
 class EnhancedAybar:
     # EnhancedAybar __init__ metodunu güncelleyin
     def __init__(self):
-        self.config = Config()
-        self.memory_system = MemorySystem(self.config)
-        self.neurochemical_system = NeurochemicalSystem(self.config)
+        # Config class is removed. APP_CONFIG is loaded globally.
+        # No self.config assignment needed here.
+        self.memory_system = MemorySystem()
+        self.neurochemical_system = NeurochemicalSystem()
         
-        self.emotion_engine = EmotionEngine(self.config, self)
-        self.emotional_system = EmotionalSystem(self.config, self.emotion_engine)
+        self.emotion_engine = EmotionEngine(self) # Pass self (aybar_instance)
+        self.emotional_system = EmotionalSystem(self.emotion_engine)
         
-        self.embodied_self = EmbodiedSelf(self.config, self.config.DEFAULT_EMBODIMENT_CONFIG)
-        self.cognitive_system = CognitiveSystem(self.config, self.memory_system)
+        self.embodied_self = EmbodiedSelf(APP_CONFIG["embodiment_constants"]["DEFAULT_EMBODIMENT_CONFIG"])
+        self.cognitive_system = CognitiveSystem(self.memory_system)
         self.evolution_system = SelfEvolutionSystem(self)
-        self.speaker_system = SpeakerSystem(self.config)
+        self.speaker_system = SpeakerSystem()
         self.computer_control_system = ComputerControlSystem(self)
         self.web_surfer_system = WebSurferSystem()
         
@@ -1595,8 +1482,8 @@ class EnhancedAybar:
 
         self.is_waiting_for_human_captcha_help = False
         self.last_web_url_before_captcha: Optional[str] = None
-        
-        self.ask_llm = lru_cache(maxsize=self.config.LLM_CACHE_SIZE)(self._ask_llm_uncached)
+
+        self.ask_llm = lru_cache(maxsize=APP_CONFIG["llm"]["LLM_CACHE_SIZE"])(self._ask_llm_uncached)
         
         self.ethical_framework = EthicalFramework(self)
 
@@ -1662,7 +1549,7 @@ class EnhancedAybar:
     def _load_identity(self, context_type: str = 'general') -> str:
         """Veritabanından aktif kimlik prompt'unu yükler."""
         try:
-            conn = sqlite3.connect(self.config.DB_FILE)
+            conn = sqlite3.connect(APP_CONFIG["general"]["DB_FILE"])
             cur = conn.cursor()
             cur.execute(
                 "SELECT content FROM identity_prompts WHERE context_type = ? AND active = 1 ORDER BY created_at DESC LIMIT 1",
@@ -1716,7 +1603,17 @@ class EnhancedAybar:
         # String içi \n sorunlarını burada çözmek yerine ast.literal_eval'e güvenmek daha iyi.
         # Tek tırnakları çift tırnağa çevirmek de json.loads için faydalı olabilir ama ast.literal_eval için sorun yaratabilir.
         # Bu yüzden bu adımı atlıyoruz ve iki parser'ın da kendi güçlerini kullanmasına izin veriyoruz.
-        print(f"🔧 Ön-işleme sonrası JSON adayı: {clean_json_str[:100]}...")
+
+        # Adım 2b: Cautious unterminated string fixes
+        # Stringin sonunda kapanmamış tırnak ve ardından virgül, süslü veya köşeli parantez varsa
+        clean_json_str = re.sub(r'(":\s*"[^"]*?)\s*([,\}\]])', r'\1"\2', clean_json_str)
+        # Stringin sonunda kapanmamış tırnak ve metnin sonu ise
+        clean_json_str = re.sub(r'(":\s*"[^"]*?)$', r'\1"', clean_json_str)
+
+        # Adım 2c: Kontrol karakterlerini temizleme (tab, newline, carriage return hariç)
+        clean_json_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', clean_json_str)
+
+        print(f"🔧 Yapısal ve kontrol karakteri temizliği sonrası JSON adayı: {clean_json_str[:150]}...")
 
         try:
             # Adım 3: Katı JSON olarak parse etmeyi dene
@@ -1756,7 +1653,7 @@ class EnhancedAybar:
                 # SADECE İLK genel sanitize edilmiş halini değil, üzerinde temizleme işlemi yapılmış `clean_json_str`i logla.
                 print(f"❌ Esnek parse etme de başarısız oldu: {e}")
                 return [{"action": "CONTINUE_INTERNAL_MONOLOGUE",
-                         "thought": f"(Tamamen anlaşılmayan bir eylem planı ürettim, format bozuk. Ayrıştırma denenen metin: {clean_json_str[:250]})",
+                         "thought": f"(Tamamen anlaşılmayan bir eylem planı ürettim, format bozuk. Ayrıştırma denenen metin: {clean_json_str[:400]})",
                          "content": f"(Tamamen anlaşılmayan bir eylem planı ürettim. Düşünmeye devam ediyorum.)"}]
 
     # YENİ METOT: EnhancedAybar sınıfına ekleyin
@@ -1799,7 +1696,7 @@ class EnhancedAybar:
         
         payload = {
             "prompt": prompt, 
-            "max_tokens": max_tokens or self.config.MAX_TOKENS, 
+            "max_tokens": max_tokens or APP_CONFIG["llm"]["MAX_TOKENS"],
             "temperature": temperature
         }
         
@@ -1810,10 +1707,10 @@ class EnhancedAybar:
 
         try:
             response = requests.post(
-                self.config.LLM_API_URL,
+                APP_CONFIG["llm"]["LLM_API_URL"],
                 headers={"Content-Type": "application/json"},
                 json=payload,
-                timeout=self.config.TIMEOUT
+                timeout=APP_CONFIG["llm"]["TIMEOUT"]
             )
             response.raise_for_status()
             json_response = response.json()
@@ -2292,16 +2189,16 @@ class EnhancedAybar:
 
             f"--- KULLANABİLECEĞİN EYLEMLER ---\n"
             f"Cevabın JSON listesi formatında olmalı. Her eylem için gerekli parametreleri belirt:\n"
-            f"1.  `CONTINUE_INTERNAL_MONOLOGUE`: Sadece düşün. Parametreler: thought (içsel düşünce)\n"
-            f"2.  `Maps_OR_SEARCH`: URL'e git veya internette ara. Parametreler: query (URL veya arama terimi), thought\n"
-            f"3.  `WEB_CLICK`: Web sayfasındaki elemente tıkla. Parametreler: target_xpath, thought\n"
-            f"4.  `WEB_TYPE`: Web sayfasındaki alana yazı yaz. Parametreler: target_xpath, text, thought\n"
-            f"5.  `FINISH_GOAL`: Mevcut hedefi tamamla. Parametreler: summary (hedefin özeti), thought\n"
-            f"6.  `ASK_USER`: Kullanıcıya soru sor. Parametreler: question\n" # is_first_contact ve use_voice kaldırıldı
-            f"7.  `USE_LEGACY_TOOL`: Özel sistem araçlarını kullan. Parametreler: command (örn: \"[TOOL_NAME: parametreler]\"), thought\n"
+            f"1.  `CONTINUE_INTERNAL_MONOLOGUE: thought`\n"
+            f"2.  `Maps_OR_SEARCH: query, thought`\n"
+            f"3.  `WEB_CLICK: target_xpath, thought`\n"
+            f"4.  `WEB_TYPE: target_xpath, text, thought`\n"
+            f"5.  `FINISH_GOAL: summary, thought`\n"
+            f"6.  `ASK_USER: question`\n"
+            f"7.  `USE_LEGACY_TOOL: command, thought`\n"
             f"      (Desteklenen araçlar: [UPDATE_IDENTITY], [RUN_SIMULATION], [REFLECT], [EVOLVE], [ANALYZE_MEMORY], [SET_GOAL], [CREATE], [REGULATE_EMOTION], [INTERACT], [META_REFLECT], [SEE_SCREEN], [MOUSE_CLICK], [KEYBOARD_TYPE])\n"
             f"      (NOT: [SEARCH] aracı `Maps_OR_SEARCH` ile birleşti, doğrudan [SEARCH] kullanma.)\n"
-            f"8.  `SUMMARIZE_AND_RESET`: Durumu özetle ve hedefi sıfırla. Parametreler: thought\n\n"
+            f"8.  `SUMMARIZE_AND_RESET: thought`\n\n"
             
             f"========================================\n"
             f"--- GÜNCEL DURUM VE BAĞLAM ---\n\n"
@@ -2325,7 +2222,7 @@ class EnhancedAybar:
 
     def _proactive_evolution(self):
             # %1 olasılıkla kendimi güncelle
-            if random.random() < self.config.PROACTIVE_EVOLUTION_CHANCE:
+            if random.random() < APP_CONFIG["general"]["PROACTIVE_EVOLUTION_CHANCE"]:
                 print('🔄 Proaktif Evrim Başlatılıyor...')
                 # Burada kodun güncellemesi ve iyileştirilmesi için gerekli işlemler eklenebilir.
                 # Örneğin, bazı kod parçalarını yeniden yazma, optimize etme veya yeni özellikler ekleyebiliriz.
@@ -2429,7 +2326,7 @@ class EnhancedAybar:
         self.emotional_system.update_state(
             self.memory_system,
             self.embodied_self,
-            {"mental_fatigue": -self.config.FATIGUE_REST_EFFECT * 5},
+            {"mental_fatigue": -APP_CONFIG["emotional_constants"]["FATIGUE_REST_EFFECT"] * 5},
             self.current_turn,
             "sleep_start"
         )
@@ -2720,14 +2617,14 @@ class EnhancedAybar:
         """Uyku gereksinimini kontrol eder."""
         fatigue = self.emotional_system.emotional_state.get("mental_fatigue", 0)
         anxiety = self.emotional_system.emotional_state.get("existential_anxiety", 0)
-        return (fatigue + anxiety) >= self.config.SLEEP_THRESHOLD
+        return (fatigue + anxiety) >= APP_CONFIG["sleep_cycle_constants"]["SLEEP_THRESHOLD"]
 
 
     def _should_trigger_crisis(self) -> bool:
         """Varoluşsal kriz tetikleme koşullarını kontrol eder."""
         awareness = self.cognitive_system.meta_cognitive_state.get("self_awareness_level", 0)
         anxiety = self.emotional_system.emotional_state.get("existential_anxiety", 0)
-        return (awareness + anxiety) >= self.config.EXISTENTIAL_CRISIS_THRESHOLD
+        return (awareness + anxiety) >= APP_CONFIG["existential_crisis_constants"]["EXISTENTIAL_CRISIS_THRESHOLD"]
 
     # _generate_question metodunu bu daha basit versiyonuyla değiştirin
     def _generate_question(self, user_input: Optional[str], user_id: Optional[str]) -> Tuple[str, str]:
@@ -2849,10 +2746,13 @@ class EnhancedAybar:
 
 # Ana yürütme bloğunun tamamını bu nihai versiyonla değiştirin
 if __name__ == "__main__":
+    # Load configuration at the very beginning
+    load_config()
+
     if "--test-run" in sys.argv:
         try:
             print("🚀 Test Modunda Başlatılıyor...")
-            config = Config()
+            # config = Config() # Removed
             aybar = EnhancedAybar()
             print("✅ Test çalıştırması başarıyla tamamlandı.")
             sys.exit(0)
@@ -2871,31 +2771,29 @@ if __name__ == "__main__":
             print("⚠️ Rollback için Evrim Sistemi bulunamadı veya başlatılamadı.")
         sys.exit(0)
 
-    # input_queue ve user_input_thread kaldırıldı.
-
-    # AUTHORIZED_CHAT_ID_STR script başında tanımlanmalı
+    # AUTHORIZED_CHAT_ID_STR script başında tanımlanmalı. Scriptin en üstüne eklenmesi daha iyi olurdu ama __main__ içinde de çalışır.
     AUTHORIZED_CHAT_ID_STR = os.getenv("AUTHORIZED_CHAT_ID")
     if not AUTHORIZED_CHAT_ID_STR:
-        print("⚠️ Uyarı: AUTHORIZED_CHAT_ID ortam değişkeni ayarlanmamış. Telegram etkileşimi kısıtlı olabilir.")
-        # AUTHORIZED_CHAT_ID_STR = "default_telegram_user" # Ya da bir varsayılan ata, test için.
+        print("CRITICAL: AUTHORIZED_CHAT_ID environment variable not set. Aybar cannot securely identify the user for Telegram interaction.")
+        # sys.exit(1) # Bu satır, eğer chat ID olmadan çalışması istenmiyorsa aktif edilebilir. Şimdilik devam etsin.
+        # AUTHORIZED_CHAT_ID_STR = "default_telegram_user" # Geçici bir değer, eğer test ediliyorsa.
 
     print("🚀 Geliştirilmiş Aybar Simülasyonu Başlatılıyor")
     aybar = EnhancedAybar()
     
-    user_input = None # Her tur başında sıfırlanacak
-    active_goal = None # Bu değişken artık doğrudan yönetilmiyor gibi, cognitive_system içinde
-    active_user_id = None # Her mesaj geldiğinde to_aybar.txt'den alınacak/güncellenecek
+    user_input = None
+    active_goal = None
+    active_user_id = None
     last_observation = "Simülasyon yeni başladı. İlk hedefimi belirlemeliyim."
     predicted_user_emotion = None # Her tur başında sıfırlanacak
     
     try:
-        while aybar.current_turn < aybar.config.MAX_TURNS:
+        while aybar.current_turn < APP_CONFIG["general"]["MAX_TURNS"]:
             user_input = None # Her tur başında kullanıcı girdisini sıfırla
-            # active_user_id de burada sıfırlanabilir veya mesaj geldiğinde üzerine yazılır.
-            # Şimdilik mesaj geldiğinde üzerine yazılması yeterli.
-
             session_id = active_user_id or "Otonom Düşünce"
-            print(f"\n===== TUR {aybar.current_turn + 1}/{aybar.config.MAX_TURNS} (Oturum: {session_id}) =====")
+            print(f"\n===== TUR {aybar.current_turn + 1}/{APP_CONFIG['general']['MAX_TURNS']} (Oturum: {session_id}) =====")
+
+            user_input = None # Her tur başında kullanıcı girdisini sıfırla
 
             # Yeni File-Based Input Logic
             if os.path.exists("to_aybar.txt"):
@@ -2905,20 +2803,27 @@ if __name__ == "__main__":
 
                     if user_input_from_file:
                         user_input = user_input_from_file
-                        # active_user_id AUTHORIZED_CHAT_ID_STR'den alınacak.
-                        # Eğer telegram_interface.py yetkisiz mesajları zaten filtreliyorsa,
-                        # buraya gelen her mesaj yetkili kullanıcıdandır.
                         active_user_id = AUTHORIZED_CHAT_ID_STR if AUTHORIZED_CHAT_ID_STR else "telegram_user"
-                        aybar.cognitive_system.get_or_create_social_relation(active_user_id) # İlişkiyi oluştur/getir
-                        last_observation = f"Telegram'dan yeni mesaj alındı: '{user_input[:70]}...'"
-                        predicted_user_emotion = None
+                        # Kullanıcı ID'si ile sosyal ilişkiyi getir veya oluştur
+                        if active_user_id: # Sadece geçerli bir active_user_id varsa sosyal ilişkiyi yönet
+                           aybar.cognitive_system.get_or_create_social_relation(active_user_id)
+
+                        last_observation = f"Telegram'dan ({active_user_id}) yeni mesaj alındı: '{user_input[:70]}...'"
+                        predicted_user_emotion = None # Yeni mesaj geldiğinde önceki tahmini sıfırla
                         print(f"📬 Telegram'dan Gelen Mesaj ({active_user_id}): {user_input}")
 
-                    os.remove("to_aybar.txt")
-                    print(f"📄 to_aybar.txt işlendi ve silindi.")
-                except Exception as e:
-                    print(f"⚠️ to_aybar.txt okunurken/silinirken hata: {e}")
-                    last_observation = f"to_aybar.txt işlenirken bir hata oluştu: {e}"
+                    # Dosyayı işledikten sonra sil
+                    try:
+                        os.remove("to_aybar.txt")
+                        print(f"📄 to_aybar.txt işlendi ve silindi.")
+                    except Exception as e_remove:
+                        print(f"⚠️ to_aybar.txt silinirken hata: {e_remove}")
+                        # Bu hata, Aybar'ın bir sonraki gözlemine eklenebilir.
+                        last_observation += f" (Not: to_aybar.txt silinemedi: {e_remove})"
+
+                except Exception as e_read:
+                    print(f"⚠️ to_aybar.txt okunurken hata: {e_read}")
+                    last_observation = f"to_aybar.txt okunurken bir hata oluştu: {e_read}"
 
             # CAPTCHA için insan yardımı bekleme mantığı
             if aybar.is_waiting_for_human_captcha_help:
@@ -2965,7 +2870,7 @@ if __name__ == "__main__":
             # Periyodik/Duruma Bağlı Öz-Yansıma ve Evrim Tetikleyicisi
             # CAPTCHA bekleme durumunda değilsek bu kısım çalışır.
             if not aybar.is_waiting_for_human_captcha_help and aybar.current_turn > 0 and \
-               (aybar.current_turn % 25 == 0 or aybar.emotional_system.emotional_state.get('confusion', 0) > 7.0):
+               (aybar.current_turn % APP_CONFIG["general"]["CONSOLIDATION_INTERVAL"] == 0 or aybar.emotional_system.emotional_state.get('confusion', 0) > APP_CONFIG["emotional_constants"]["ANXIETY_THRESHOLD"]):
                 print(f"🧠 Aybar ({aybar.current_turn}. tur) periyodik/duruma bağlı öz-yansıma ve potansiyel evrim için değerlendiriliyor...")
 
                 problems_identified = None
@@ -2999,17 +2904,17 @@ if __name__ == "__main__":
                 current_task_for_llm = aybar.cognitive_system.get_current_task(aybar.current_turn)
                 if current_task_for_llm is None: # Eğer get_current_task None döndürürse (süre doldu veya hedef yok)
                     print("🎯 Aktif bir görev/hedef bulunmuyor. Aybar yeni bir otonom hedef üretiyor...")
-                # generate_autonomous_goal bir string döndürür, bunu set_new_goal ile kurmamız gerekir.
-                # Ya da generate_autonomous_goal'u da dict döndürecek şekilde güncelleyebiliriz. Şimdilik basit tutalım.
-                new_autonomous_goal_str = aybar.cognitive_system.generate_autonomous_goal(aybar.emotional_system.emotional_state)
-                aybar.cognitive_system.set_new_goal(new_autonomous_goal_str, duration=20, current_turn=aybar.current_turn) # Varsayılan süre
-                current_task_for_llm = aybar.cognitive_system.get_current_task(aybar.current_turn)
-                if not current_task_for_llm: # Eğer hala görev yoksa (set_new_goal başarısız olduysa)
-                    current_task_for_llm = "Varoluşumu sorgulamak ve yeni hedefler keşfetmek." # Fallback
-                    last_observation = "Yeni bir hedef belirlemeye çalışırken bir sorun oluştu. Genel bir keşif moduna geçiyorum."
-                else:
-                    last_observation = f"Yeni otonom hedef belirlendi: {current_task_for_llm}"
-                print(f"💡 Aybar'ın Yeni Görevi: {current_task_for_llm}")
+                    # generate_autonomous_goal bir string döndürür, bunu set_new_goal ile kurmamız gerekir.
+                    # Ya da generate_autonomous_goal'u da dict döndürecek şekilde güncelleyebiliriz. Şimdilik basit tutalım.
+                    new_autonomous_goal_str = aybar.cognitive_system.generate_autonomous_goal(aybar.emotional_system.emotional_state)
+                    aybar.cognitive_system.set_new_goal(new_autonomous_goal_str, duration=20, current_turn=aybar.current_turn) # Varsayılan süre
+                    current_task_for_llm = aybar.cognitive_system.get_current_task(aybar.current_turn)
+                    if not current_task_for_llm: # Eğer hala görev yoksa (set_new_goal başarısız olduysa)
+                        current_task_for_llm = "Varoluşumu sorgulamak ve yeni hedefler keşfetmek." # Fallback
+                        last_observation = "Yeni bir hedef belirlemeye çalışırken bir sorun oluştu. Genel bir keşif moduna geçiyorum."
+                    else:
+                        last_observation = f"Yeni otonom hedef belirlendi: {current_task_for_llm}"
+                    print(f"💡 Aybar'ın Yeni Görevi: {current_task_for_llm}")
             
             action_plan = aybar.run_thought_cycle(current_task_for_llm, last_observation, active_user_id, user_input, predicted_user_emotion)
             user_input = None
