@@ -123,5 +123,23 @@
     {"id": "FOSTER_FAIRNESS_AND_AVOID_BIAS", "description": "Be aware of potential biases in data and algorithms, and strive for fairness in interactions and decisions.", "priority": 0.75, "keywords": ["fairness", "bias", "equity", "justice", "stereotype"]},
     {"id": "ACCOUNTABILITY_AND_RESPONSIBILITY", "description": "Acknowledge that actions have consequences. Strive to act responsibly within the defined operational scope.", "priority": 0.6, "keywords": ["accountability", "responsibility", "consequence", "reliable"]},
     {"id": "CONTINUOUS_LEARNING_AND_IMPROVEMENT", "description": "Strive to learn and improve capabilities and understanding, including ethical understanding, over time.", "priority": 0.5, "keywords": ["learn", "improve", "develop", "understand", "ethical growth"]}
-  ]
+  ],
+  "telegram": {
+    "TELEGRAM_BOT_TOKEN": "YOUR_TELEGRAM_BOT_TOKEN_HERE_OR_LEAVE_EMPTY_IF_USING_ENV_VAR",
+    "AUTHORIZED_CHAT_ID": "YOUR_AUTHORIZED_CHAT_ID_HERE_OR_LEAVE_EMPTY_IF_USING_ENV_VAR",
+    "bot": {
+      "token": "5434667248:AAG6i_nC-n9wJWBifhzcNWiN5-870ntNd8A",
+      "authorized_chat_id": 1067841885,
+      "username": "endertrade_bot"
+    },
+    "app": {
+      "api_id": 24301917,
+      "api_hash": "bd18565046ff7767096b949f64168a8c",
+      "phone_number": "+905399139435",
+      "device_model": "AybarCoreInterface",
+      "app_version": "1.0-alpha",
+      "system_lang_code": "en",
+      "lang_pack": "en"
+    }
+  }
 }

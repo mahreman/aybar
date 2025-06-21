@@ -3,6 +3,7 @@ import sys
 import time
 import logging
 import threading
+import json # Added import for json
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
@@ -14,6 +15,27 @@ logger = logging.getLogger(__name__)
 
 TO_AYBAR_FILE = "to_aybar.txt"
 FROM_AYBAR_FILE = "from_aybar.txt"
+
+# Global script configuration
+SCRIPT_CONFIG = {}
+
+def load_script_config():
+    """Loads 'telegram' section from config.json into SCRIPT_CONFIG."""
+    global SCRIPT_CONFIG
+    try:
+        with open("config.json", 'r', encoding='utf-8') as f:
+            full_config = json.load(f)
+            SCRIPT_CONFIG = full_config.get("telegram", {})
+        if not SCRIPT_CONFIG:
+            logger.warning("No 'telegram' section found in config.json or it's empty.")
+        else:
+            logger.info("Telegram configuration loaded from config.json")
+    except FileNotFoundError:
+        logger.warning("config.json not found. Relying solely on environment variables for Telegram config.")
+    except json.JSONDecodeError as e:
+        logger.error(f"Error decoding config.json: {e}. Relying solely on environment variables.")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while loading config.json: {e}. Relying solely on environment variables.")
 
 class TelegramBridge:
     def __init__(self, token: str, authorized_chat_id: int):
@@ -128,23 +150,33 @@ class TelegramBridge:
 
 if __name__ == "__main__":
     logger.info("Telegram Interface Script starting...")
+    load_script_config() # Load config from file first
 
     TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    AUTH_CHAT_ID_STR = os.getenv("AUTHORIZED_CHAT_ID")
-
     if not TOKEN:
-        logger.critical("Fatal: TELEGRAM_BOT_TOKEN environment variable not set.")
-        sys.exit(1)
+        logger.info("TELEGRAM_BOT_TOKEN not found in environment variables. Trying config.json...")
+        TOKEN = SCRIPT_CONFIG.get("TELEGRAM_BOT_TOKEN")
+        if not TOKEN or TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE_OR_LEAVE_EMPTY_IF_USING_ENV_VAR":
+            logger.critical("Fatal: TELEGRAM_BOT_TOKEN not found in environment variables or config.json, or is a placeholder.")
+            sys.exit(1)
+
+    AUTH_CHAT_ID_STR = os.getenv("AUTHORIZED_CHAT_ID")
+    if not AUTH_CHAT_ID_STR:
+        logger.info("AUTHORIZED_CHAT_ID not found in environment variables. Trying config.json...")
+        AUTH_CHAT_ID_STR = SCRIPT_CONFIG.get("AUTHORIZED_CHAT_ID")
+        if not AUTH_CHAT_ID_STR or AUTH_CHAT_ID_STR == "YOUR_AUTHORIZED_CHAT_ID_HERE_OR_LEAVE_EMPTY_IF_USING_ENV_VAR":
+            logger.critical("Fatal: AUTHORIZED_CHAT_ID not found in environment variables or config.json, or is a placeholder.")
+            sys.exit(1)
 
     AUTHORIZED_CHAT_ID = None
-    if AUTH_CHAT_ID_STR:
-        try:
-            AUTHORIZED_CHAT_ID = int(AUTH_CHAT_ID_STR)
-        except ValueError:
-            logger.critical(f"Fatal: AUTHORIZED_CHAT_ID ('{AUTH_CHAT_ID_STR}') is not a valid integer.")
-            sys.exit(1)
-    else:
-        logger.critical("Fatal: AUTHORIZED_CHAT_ID environment variable not set.")
+    try:
+        AUTHORIZED_CHAT_ID = int(AUTH_CHAT_ID_STR)
+    except ValueError:
+        logger.critical(f"Fatal: AUTHORIZED_CHAT_ID ('{AUTH_CHAT_ID_STR}') is not a valid integer.")
+        sys.exit(1)
+
+    if not AUTHORIZED_CHAT_ID: # Should be caught by int conversion or previous checks, but as a safeguard
+        logger.critical("Fatal: AUTHORIZED_CHAT_ID is not set after all checks.")
         sys.exit(1)
 
     bridge = TelegramBridge(token=TOKEN, authorized_chat_id=AUTHORIZED_CHAT_ID)
