@@ -29,9 +29,11 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 from bs4 import BeautifulSoup
+import logging # Ensure logging is imported
 
 # Global configuration dictionary
 APP_CONFIG = {}
+logger = logging.getLogger(__name__) # Module-level logger
 
 def load_config():
     """Loads configuration from config.json into the global APP_CONFIG."""
@@ -164,7 +166,7 @@ class MemorySystem:
                 try:
                     self.cursor.execute("ALTER TABLE procedural ADD COLUMN last_used_turn INTEGER DEFAULT 0")
                 except sqlite3.OperationalError: pass
-                
+
                 # İndeksler: name için UNIQUE index CREATE TABLE içinde zaten tanımlı (TEXT UNIQUE NOT NULL)
                 # Bu nedenle burada tekrar CREATE UNIQUE INDEX yapmaya gerek yok, normal index yeterli olabilir
                 # veya mevcutsa ve sorun çıkarmıyorsa bırakılabilir. Task'e göre name için UNIQUE index isteniyor.
@@ -174,6 +176,38 @@ class MemorySystem:
                 self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_procedural_name ON procedural (name)")
                 self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_procedural_usage_count ON procedural (usage_count)")
                 self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_procedural_last_used_turn ON procedural (last_used_turn)")
+
+                # --- Procedural Table Schema Verification and Migration Trigger ---
+                try:
+                    self.cursor.execute("PRAGMA table_info(procedural);")
+                    columns_info = self.cursor.fetchall()
+                    column_names = [info[1] for info in columns_info]
+
+                    if 'name' not in column_names or 'steps' not in column_names:
+                        logger.warning("'procedural' tablosunda 'name' ve/veya 'steps' sütunu bulunamadı. Eski şema tespit edildi.")
+                        self._migrate_procedural_schema() # This method will handle sys.exit on failure or user disapproval
+
+                        # Re-check schema after migration attempt
+                        # If _migrate_procedural_schema exited, this part won't be reached.
+                        # If it returned because it thinks it succeeded, we verify.
+                        self.cursor.execute("PRAGMA table_info(procedural);")
+                        columns_info_after_migration = self.cursor.fetchall()
+                        column_names_after_migration = [info[1] for info in columns_info_after_migration]
+                        if 'name' not in column_names_after_migration or 'steps' not in column_names_after_migration:
+                            critical_error_message = "🚨 KRİTİK: Şema migrasyonu sonrası 'procedural' tablosu hala hatalı. Aybar başlatılamıyor."
+                            print(critical_error_message)
+                            logger.critical(critical_error_message)
+                            if hasattr(self, 'conn') and self.conn:
+                                self.conn.close()
+                            sys.exit(1)
+                        else:
+                            logger.info("✅ Şema migrasyonu sonrası 'procedural' tablosu doğrulandı.")
+                    else:
+                        logger.info("✅ 'procedural' tablosu 'name' ve 'steps' sütunlarını içeriyor, şema doğrulandı.")
+                except sqlite3.Error as e_pragma:
+                    logger.error(f"PRAGMA table_info(procedural) sorgusu sırasında hata: {e_pragma}. Bu, 'procedural' tablosunun hiç oluşturulamadığı anlamına gelebilir.")
+                    raise # Re-raise to be caught by the main _setup_database exception handler
+                # --- End of Procedural Table Schema Verification ---
 
                 # EKLENDİ: Kimlik (Bilinç) Tablosu
                 self.cursor.execute("""
@@ -201,9 +235,166 @@ class MemorySystem:
                     )
                 
                 self.conn.commit()
-            print(f"🗃️ SQLite veritabanı '{self.db_file}' üzerinde hazır ve doğrulandı.")
-        except Exception as e:
-            print(f"Veritabanı kurulum hatası: {e}")
+            # Moved the success print to be after the commit that might happen after migration.
+            # If migration happens and exits, this won't be printed.
+            # If migration happens and succeeds, or if no migration was needed, this will be printed.
+            logger.info(f"🗃️ SQLite veritabanı '{self.db_file}' üzerinde hazır ve doğrulandı.")
+        except sqlite3.OperationalError as e_op: # Catch more specific SQLite errors if possible
+            logger.critical(f"Veritabanı operasyonel hatası (muhtemelen dosya/izin sorunu veya bozuk DB): {e_op}")
+            print(f"🚨 KRİTİK VERİTABANI HATASI: {e_op}. 'aybar_memory.db' dosyası bozuk veya erişilemiyor olabilir. Lütfen kontrol edin.")
+            if hasattr(self, 'conn') and self.conn: # try to close connection if open
+                try:
+                    self.conn.close()
+                except Exception as e_close:
+                    logger.error(f"Veritabanı bağlantısı kapatılırken ek hata: {e_close}")
+            sys.exit(1)
+        except Exception as e: # General fallback
+            logger.critical(f"Veritabanı kurulumu sırasında genel bir hata oluştu: {e}", exc_info=True)
+            print(f"🚨 KRİTİK HATA: Veritabanı kurulamadı: {e}")
+            if hasattr(self, 'conn') and self.conn:
+                 try:
+                     self.conn.close()
+                 except Exception as e_close:
+                     logger.error(f"Veritabanı bağlantısı kapatılırken ek hata: {e_close}")
+            sys.exit(1)
+
+    def _migrate_procedural_schema(self) -> bool:
+        print("🚨 Eski 'procedural' tablo şeması tespit edildi. Hafıza kurtarma operasyonu başlatılıyor...")
+        logger.info("Eski 'procedural' tablo şeması tespit edildi. Hafıza kurtarma operasyonu başlatılıyor...")
+
+        try:
+            logger.info("Eski 'procedural' tablosu 'procedural_old' olarak yeniden adlandırılıyor...")
+            self.cursor.execute("ALTER TABLE procedural RENAME TO procedural_old;")
+            logger.info("'procedural' tablosu 'procedural_old' olarak yeniden adlandırıldı.")
+
+            logger.info("Yeni şemayla 'procedural' tablosu oluşturuluyor...")
+            self.cursor.execute("""
+            CREATE TABLE procedural (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                turn INTEGER NOT NULL,
+                name TEXT UNIQUE NOT NULL,
+                steps TEXT NOT NULL,
+                usage_count INTEGER DEFAULT 0,
+                last_used_turn INTEGER DEFAULT 0,
+                data TEXT
+            )
+            """)
+            # Re-create indexes for the new table. UNIQUE on name is part of CREATE TABLE.
+            self.cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_procedural_name ON procedural (name)") # Explicitly ensure UNIQUE
+            self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_procedural_usage_count ON procedural (usage_count)")
+            self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_procedural_last_used_turn ON procedural (last_used_turn)")
+            logger.info("Yeni 'procedural' tablosu ve indeksleri başarıyla oluşturuldu.")
+
+            logger.info("'procedural_old' tablosundan veriler okunuyor...")
+            self.cursor.execute("SELECT data, timestamp, turn FROM procedural_old;")
+            old_rows = self.cursor.fetchall()
+            logger.info(f"{len(old_rows)} adet eski prosedür kaydı bulundu.")
+
+            migrated_count = 0
+            for old_row_tuple in old_rows:
+                old_data_json_str = old_row_tuple[0]
+                old_timestamp = old_row_tuple[1]
+                old_turn = old_row_tuple[2]
+
+                try:
+                    entry = json.loads(old_data_json_str)
+                    # Try to find name and steps from common old field names
+                    procedure_name = entry.get('name', entry.get('procedure_name', entry.get('title')))
+                    procedure_steps = entry.get('steps', entry.get('actions'))
+
+                    # Ensure steps are stored as a JSON string if they are a list, or just string
+                    if isinstance(procedure_steps, list):
+                        procedure_steps = json.dumps(procedure_steps) # Convert list of steps to JSON string
+                    elif not isinstance(procedure_steps, str):
+                        procedure_steps = str(procedure_steps) # Fallback to string conversion
+
+                    if procedure_name and procedure_steps:
+                        logger.debug(f"Migrating procedure: '{procedure_name}'")
+                        try:
+                            self.cursor.execute("""
+                                INSERT INTO procedural (name, steps, timestamp, turn, usage_count, last_used_turn, data)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                str(procedure_name), # Ensure name is string
+                                str(procedure_steps),# Ensure steps is string
+                                old_timestamp,
+                                old_turn,
+                                entry.get('usage_count', 0),
+                                entry.get('last_used_turn', 0),
+                                old_data_json_str # Store original data blob as well
+                            ))
+                            migrated_count += 1
+                        except sqlite3.IntegrityError as ie: # Handles UNIQUE constraint violation for 'name'
+                            logger.warning(f"'{procedure_name}' prosedürü için UNIQUE kısıtlama hatası (muhtemelen zaten var): {ie}. Bu kayıt atlanıyor.")
+                        except Exception as insert_e:
+                            logger.error(f"'{procedure_name}' prosedürü yeni tabloya eklenirken hata: {insert_e}")
+                    else:
+                        logger.warning(f"Eski kayıtta 'name' veya 'steps' bulunamadı, atlanıyor: {old_data_json_str[:100]}...")
+                except json.JSONDecodeError as json_e:
+                    logger.error(f"Eski prosedür verisi JSON formatında değil, atlanıyor: {json_e}. Veri: {old_data_json_str[:100]}...")
+                except Exception as process_e: # Catch any other error during processing a single row
+                    logger.error(f"Eski prosedür verisi işlenirken bilinmeyen hata, atlanıyor: {process_e}. Veri: {old_data_json_str[:100]}...")
+
+            logger.info(f"{migrated_count} prosedür yeni şemaya taşınmaya çalışıldı.")
+
+            logger.info("'procedural_old' tablosu siliniyor...")
+            self.cursor.execute("DROP TABLE procedural_old;")
+            logger.info("'procedural_old' tablosu başarıyla silindi.")
+
+            self.conn.commit() # Commit all changes if successful
+            success_message = "✅ Hafıza kurtarma operasyonu başarılı. Uygun prosedürel anılar yeni şemaya taşındı."
+            print(success_message)
+            logger.info(success_message)
+            return True # Indicate success
+
+        except Exception as migration_error:
+            logger.error(f"Hafıza kurtarma operasyonu sırasında genel bir hata oluştu: {migration_error}", exc_info=True)
+            print(f"❌ Hafıza kurtarma operasyonu başarısız oldu. Hata: {migration_error}")
+
+            try:
+                self.conn.rollback() # Attempt to rollback any partial changes
+                logger.info("Başarısız migrasyon sonrası rollback denendi.")
+            except Exception as rollback_e:
+                logger.error(f"Rollback sırasında hata: {rollback_e}")
+
+            # Critical decision point: Ask user if they want to delete the DB
+            # Use a loop for clear input
+            while True:
+                user_approval = input(f"Veritabanını ('{self.db_file}') tamamen silip sıfırdan başlamak için onay veriyor musun? Bu işlem tüm hafızanın silinmesine neden olacak. (evet/hayır): ").strip().lower()
+                if user_approval in ["evet", "hayır"]:
+                    break
+                print("Lütfen 'evet' ya da 'hayır' yazın.")
+
+            if user_approval == "evet":
+                logger.warning("Kullanıcı veritabanının silinmesini onayladı.")
+                try:
+                    self.conn.close() # Close connection before deleting file
+                    logger.info("Veritabanı bağlantısı kapatıldı.")
+                except Exception as close_e:
+                    logger.error(f"Veritabanı bağlantısı kapatılırken hata: {close_e}")
+
+                try:
+                    if os.path.exists(self.db_file):
+                        os.remove(self.db_file)
+                        print(f"Veritabanı '{self.db_file}' silindi. Lütfen Aybar'ı yeniden başlatın.")
+                        logger.info(f"Veritabanı '{self.db_file}' kullanıcı onayıyla silindi.")
+                    else:
+                        print(f"Veritabanı dosyası '{self.db_file}' bulunamadı, silinemedi. Lütfen Aybar'ı yeniden başlatın.")
+                        logger.warning(f"Veritabanı dosyası '{self.db_file}' silinemedi çünkü bulunamadı.")
+                except Exception as e_remove:
+                    print(f"Veritabanı dosyası '{self.db_file}' silinirken hata oluştu: {e_remove}. Lütfen manuel olarak silip Aybar'ı yeniden başlatın.")
+                    logger.error(f"Veritabanı dosyası '{self.db_file}' silinirken hata: {e_remove}")
+
+                sys.exit(1) # Exit after approved deletion
+            else:
+                message = "İşlem iptal edildi. Aybar başlatılamıyor. Lütfen 'aybar_memory.db' dosyasını manuel olarak kontrol edin veya geçerli bir şemaya güncelleyin/silin."
+                print(message)
+                logger.warning(message)
+                sys.exit(1) # Exit if user does not approve deletion
+            # This return False will effectively not be reached if sys.exit is called.
+            # However, if we were to remove sys.exit, it would signify failure to the caller.
+            # return False
 
     def add_memory(self, layer: str, entry: Dict, max_retries: int = 3):
         """Belleğe yeni bir giriş ekler ve doğrudan veritabanına kaydeder."""
@@ -1482,9 +1673,9 @@ class EnhancedAybar:
 
         self.is_waiting_for_human_captcha_help = False
         self.last_web_url_before_captcha: Optional[str] = None
-
-        self.ask_llm = lru_cache(maxsize=APP_CONFIG["llm"]["LLM_CACHE_SIZE"])(self._ask_llm_uncached)
         
+        self.ask_llm = lru_cache(maxsize=APP_CONFIG["llm"]["LLM_CACHE_SIZE"])(self._ask_llm_uncached)
+
         self.ethical_framework = EthicalFramework(self)
 
         self._check_for_guardian_logs()
