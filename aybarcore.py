@@ -177,37 +177,50 @@ class MemorySystem:
                 self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_procedural_usage_count ON procedural (usage_count)")
                 self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_procedural_last_used_turn ON procedural (last_used_turn)")
 
-                # --- Procedural Table Schema Verification and Migration Trigger ---
-                try:
-                    self.cursor.execute("PRAGMA table_info(procedural);")
-                    columns_info = self.cursor.fetchall()
-                    column_names = [info[1] for info in columns_info]
+                # --- Schema Verification and Migration Call ---
+                self.cursor.execute("PRAGMA table_info(procedural);")
+                columns_info = self.cursor.fetchall()
+                column_names = [info[1] for info in columns_info] # Column name is at index 1
 
-                    if 'name' not in column_names or 'steps' not in column_names:
-                        logger.warning("'procedural' tablosunda 'name' ve/veya 'steps' sütunu bulunamadı. Eski şema tespit edildi.")
-                        self._migrate_procedural_schema() # This method will handle sys.exit on failure or user disapproval
+                schema_ok = True
+                if 'name' not in column_names:
+                    logger.warning("VERİTABANI: 'procedural' tablosunda 'name' sütunu bulunamadı.")
+                    schema_ok = False
+                if 'steps' not in column_names: # Also check for 'steps' for completeness
+                    logger.warning("VERİTABANI: 'procedural' tablosunda 'steps' sütunu bulunamadı.")
+                    schema_ok = False
 
-                        # Re-check schema after migration attempt
-                        # If _migrate_procedural_schema exited, this part won't be reached.
-                        # If it returned because it thinks it succeeded, we verify.
-                        self.cursor.execute("PRAGMA table_info(procedural);")
-                        columns_info_after_migration = self.cursor.fetchall()
-                        column_names_after_migration = [info[1] for info in columns_info_after_migration]
-                        if 'name' not in column_names_after_migration or 'steps' not in column_names_after_migration:
-                            critical_error_message = "🚨 KRİTİK: Şema migrasyonu sonrası 'procedural' tablosu hala hatalı. Aybar başlatılamıyor."
-                            print(critical_error_message)
-                            logger.critical(critical_error_message)
-                            if hasattr(self, 'conn') and self.conn:
-                                self.conn.close()
-                            sys.exit(1)
-                        else:
-                            logger.info("✅ Şema migrasyonu sonrası 'procedural' tablosu doğrulandı.")
+                if not schema_ok:
+                    logger.info("Eski 'procedural' tablo şeması tespit edildi, _migrate_procedural_schema çağrılıyor.")
+                    if hasattr(self, '_migrate_procedural_schema'):
+                        migration_attempted_and_succeeded = self._migrate_procedural_schema() # This method handles user prompts and exits on its own if it fails critically or user says no to deletion. It returns True on success.
+
+                        if migration_attempted_and_succeeded: # True if migration was successful and it didn't exit
+                             logger.info("Şema migrasyonu başarılı oldu. Şema tekrar doğrulanıyor.")
+                             self.cursor.execute("PRAGMA table_info(procedural);")
+                             columns_info_after_migration = self.cursor.fetchall()
+                             column_names_after_migration = [info[1] for info in columns_info_after_migration]
+                             if 'name' not in column_names_after_migration or 'steps' not in column_names_after_migration:
+                                 critical_error_message = "🚨 KRİTİK VERİTABANI HATASI: Şema migrasyonu denemesine rağmen 'procedural' tablosu hala hatalı ('name' veya 'steps' sütunu eksik). Aybar başlatılamıyor."
+                                 print(critical_error_message)
+                                 logger.critical(critical_error_message)
+                                 if hasattr(self, 'conn') and self.conn:
+                                     self.conn.close()
+                                 sys.exit(1)
+                             else:
+                                 logger.info("✅ Migrasyon sonrası 'procedural' tablosu doğrulandı.")
+                        # If migration_attempted_and_succeeded is False, it implies _migrate_procedural_schema handled the exit.
+                        # No specific action needed here for that case as sys.exit would have been called.
                     else:
-                        logger.info("✅ 'procedural' tablosu 'name' ve 'steps' sütunlarını içeriyor, şema doğrulandı.")
-                except sqlite3.Error as e_pragma:
-                    logger.error(f"PRAGMA table_info(procedural) sorgusu sırasında hata: {e_pragma}. Bu, 'procedural' tablosunun hiç oluşturulamadığı anlamına gelebilir.")
-                    raise # Re-raise to be caught by the main _setup_database exception handler
-                # --- End of Procedural Table Schema Verification ---
+                        critical_error_message = "🚨 KRİTİK VERİTABANI HATASI: 'aybar_memory.db' dosyası eski bir şemaya sahip ('procedural' tablosunda 'name'/'steps' sütunu eksik) ve migrasyon fonksiyonu bulunamadı. Lütfen proje klasöründeki 'aybar_memory.db' dosyasını manuel olarak silip Aybar'ı yeniden başlatın."
+                        print(critical_error_message)
+                        logger.critical(critical_error_message)
+                        if hasattr(self, 'conn') and self.conn:
+                            self.conn.close()
+                        sys.exit(1)
+                else:
+                    logger.info("✅ 'procedural' tablosu 'name' ve 'steps' sütunlarını içeriyor, şema doğrulandı.")
+                # --- End of Schema Verification ---
 
                 # EKLENDİ: Kimlik (Bilinç) Tablosu
                 self.cursor.execute("""
@@ -1683,6 +1696,65 @@ class EnhancedAybar:
         print(f"🧬 Aybar Kimliği Yüklendi: {self.identity_prompt[:70]}...")
         print("🚀 Geliştirilmiş Aybar Başlatıldı")
 
+    def _find_json_blob(self, text: str) -> Optional[str]:
+        """
+        Finds the first complete JSON array or object in the given text.
+        Prioritizes arrays over objects if both start at the same position (unlikely with pre-sanitized text).
+        Handles simple string literal escaping for brackets/braces.
+        """
+        if not text:
+            return None
+
+        # Helper to find a balanced structure (array or object)
+        def _find_balanced(text_to_search: str, open_char: str, close_char: str) -> Optional[str]:
+            first_char_idx = text_to_search.find(open_char)
+            if first_char_idx == -1:
+                return None
+
+            level = 0
+            in_string = False
+            escaped = False
+
+            for i in range(first_char_idx, len(text_to_search)):
+                char = text_to_search[i]
+
+                if in_string:
+                    if char == '"' and not escaped:
+                        in_string = False
+                    elif char == '\\' and not escaped:
+                        escaped = True
+                        continue
+                    escaped = False # Reset escape status after checking
+                    continue # Ignore other chars inside string for balancing
+
+                escaped = False # Reset escape status if not in string or after processing escape
+
+                if char == '"':
+                    in_string = True
+                elif char == open_char:
+                    level += 1
+                elif char == close_char:
+                    level -= 1
+                    if level == 0:
+                        # Found the end of the outermost structure starting from first_char_idx
+                        return text_to_search[first_char_idx : i + 1]
+            return None # Unbalanced structure
+
+        # Try to find array first
+        json_array_str = _find_balanced(text, '[', ']')
+        if json_array_str:
+            logger.debug(f"JSON blob finder: Found array: {json_array_str[:100]}...")
+            return json_array_str
+
+        # If no array, try to find object
+        json_object_str = _find_balanced(text, '{', '}')
+        if json_object_str:
+            logger.debug(f"JSON blob finder: Found object: {json_object_str[:100]}...")
+            return json_object_str
+
+        logger.debug("JSON blob finder: No valid JSON array or object found.")
+        return None
+
     def _sanitize_llm_output(self, text: str) -> str:
         """Metin içindeki kod bloklarını, yorumları ve diğer programlama artıklarını temizler."""
         if not isinstance(text, str):
@@ -1769,83 +1841,98 @@ class EnhancedAybar:
         # Önce LLM çıktısını genel olarak sanitize et (istenmeyen meta yorumlar vb.)
         # Bu, JSON yapısını bozabilecek dışsal metinleri temizler.
         # ÖNEMLİ: Ham LLM çıktısını ilk olarak burada genel olarak sanitize ediyoruz.
-        sanitized_response_text = self._sanitize_llm_output(response_text)
+        sanitized_text = self._sanitize_llm_output(response_text)
+        logger.debug(f"Sanitized LLM output for JSON parsing: {sanitized_text[:200]}...")
 
-        # Adım 1: En dıştaki JSON array'ini bulmaya çalışalım.
-        # Bu, LLM'in başına veya sonuna eklediği fazladan metinleri ayıklamaya yardımcı olur.
-        array_match = re.search(r'\[\s*(\{.*?\}(?:,\s*\{.*?\})*\s*)\]', sanitized_response_text, re.DOTALL)
-        if array_match:
-            clean_json_str = array_match.group(0)
-            print(f"🔍 Olası JSON array bulundu: {clean_json_str[:100]}...")
+        # Adım 1: En dıştaki JSON array veya object'i bulmaya çalışalım.
+        json_blob_candidate = self._find_json_blob(sanitized_text)
+
+        if not json_blob_candidate:
+            logger.warning("LLM'den geçerli bir JSON planı çıkarılamadı (blob bulunamadı).")
+            return [{"action": "CONTINUE_INTERNAL_MONOLOGUE",
+                     "thought": "LLM'den geçerli bir JSON planı çıkarılamadı (blob bulunamadı).",
+                     "content": "Düşüncelerimi topluyorum, bir sonraki adımımı planlayacağım."}]
+
+        # Adım 1.5: Eğer bulunan blob bir JSON object ise, onu bir listeye sarmala.
+        # Parser her zaman bir JSON array (eylem listesi) bekler.
+        if json_blob_candidate.startswith('{'):
+            final_json_str = f"[{json_blob_candidate}]"
+            logger.debug(f"JSON object found, wrapped into array: {final_json_str[:150]}...")
+        elif json_blob_candidate.startswith('['):
+            final_json_str = json_blob_candidate
+            logger.debug(f"JSON array found: {final_json_str[:150]}...")
         else:
-            # Eğer array bulunamazsa, LLM tek bir JSON objesi döndürmüş olabilir veya format tamamen bozuk olabilir.
-            # Bu durumda, genel sanitize edilmiş metni olduğu gibi alıp şansımızı deneyeceğiz.
-            clean_json_str = sanitized_response_text.strip()
-            print(f"⚠️ JSON array regex ile bulunamadı. Ham sanitize edilmiş metin denenecek: {clean_json_str[:100]}...")
+            logger.error(f"_find_json_blob geçersiz bir şey döndürdü: {json_blob_candidate[:100]}")
+            return [{"action": "CONTINUE_INTERNAL_MONOLOGUE", "thought": "_find_json_blob'dan beklenmedik çıktı.", "content": "İçsel bir hatayla karşılaştım."}]
+
 
         # Adım 2: String üzerinde yapısal JSON temizliği (trailing komutlar, eksik komutlar)
-        # Trailing virgülleri temizle (parantezlerden ve süslü parantezlerden önce)
-        clean_json_str = re.sub(r',\s*\]', ']', clean_json_str)
-        clean_json_str = re.sub(r',\s*\}', '}', clean_json_str)
+        # ve KONTROL KARAKTERİ TEMİZLİĞİ (Plan Adım 2.3)
+        # Bu temizlikler artık `final_json_str` üzerinde yapılmalı.
+        processed_json_str = final_json_str
+        # Basit yapısal düzeltmeler
+        processed_json_str = re.sub(r',\s*\]', ']', processed_json_str) # Trailing comma before ]
+        processed_json_str = re.sub(r',\s*\}', '}', processed_json_str) # Trailing comma before }
+        processed_json_str = re.sub(r'\}\s*\{', '},{', processed_json_str) # Missing comma between } {
 
-        # Basit eksik virgül ekleme: } { -> },{ (arada sadece boşluk varsa)
-        clean_json_str = re.sub(r'\}\s*\{', '},{', clean_json_str)
+        # Kapanmamış string sonlandırma denemeleri (dikkatli)
+        processed_json_str = re.sub(r'(":\s*"[^"]*?)\s*([,\}\]])', r'\1"\2', processed_json_str) # Missing quote before , } or ]
+        processed_json_str = re.sub(r'(":\s*"[^"]*?)$', r'\1"', processed_json_str) # Missing quote at EOL
 
-        # String içi \n sorunlarını burada çözmek yerine ast.literal_eval'e güvenmek daha iyi.
-        # Tek tırnakları çift tırnağa çevirmek de json.loads için faydalı olabilir ama ast.literal_eval için sorun yaratabilir.
-        # Bu yüzden bu adımı atlıyoruz ve iki parser'ın da kendi güçlerini kullanmasına izin veriyoruz.
+        # Kontrol karakterlerini temizle (ASCII C0 control characters (excluding tab, LF, CR) and DEL)
+        processed_json_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', processed_json_str)
 
-        # Adım 2b: Cautious unterminated string fixes
-        # Stringin sonunda kapanmamış tırnak ve ardından virgül, süslü veya köşeli parantez varsa
-        clean_json_str = re.sub(r'(":\s*"[^"]*?)\s*([,\}\]])', r'\1"\2', clean_json_str)
-        # Stringin sonunda kapanmamış tırnak ve metnin sonu ise
-        clean_json_str = re.sub(r'(":\s*"[^"]*?)$', r'\1"', clean_json_str)
+        logger.info(f"🔧 Yapısal ve kontrol karakteri temizliği sonrası JSON adayı: {processed_json_str[:200]}...")
 
-        # Adım 2c: Kontrol karakterlerini temizleme (tab, newline, carriage return hariç)
-        clean_json_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', clean_json_str)
-
-        print(f"🔧 Yapısal ve kontrol karakteri temizliği sonrası JSON adayı: {clean_json_str[:150]}...")
+        keys_to_sanitize = [
+            "thought", "content", "question", "summary", "query",
+            "text", "command", "url", "filename", "code",
+            "scenario", "prompt", "name", "steps", "description",
+            "message", "user_input", "response_text", "page_content",
+            "error_message", "log_message", "goal", "sub_goal"
+        ]
 
         try:
             # Adım 3: Katı JSON olarak parse etmeyi dene
-            action_plan_list = json.loads(clean_json_str)
-            if not isinstance(action_plan_list, list): # Her zaman bir liste bekliyoruz.
-                action_plan_list = [action_plan_list]
+            action_plan_list = json.loads(processed_json_str)
 
-            # 3. Adım: Parse edilmiş JSON içindeki metin alanlarını sanitize et
+            if not isinstance(action_plan_list, list):
+                 logger.warning(f"JSON.loads'tan sonra beklenen liste değil, dict geldi. Tekrar listeye sarılıyor. Gelen: {action_plan_list}")
+                 action_plan_list = [action_plan_list]
+
+            # Adım 4: Parse edilmiş JSON içindeki metin alanlarını sanitize et (Plan Adım 2.4 - Doğrulama)
             for item in action_plan_list:
                 if isinstance(item, dict):
                     for key, value in item.items():
-                        if isinstance(value, str) and key in ["thought", "content", "question", "summary", "query", "text", "command", "url", "filename", "code", "scenario", "prompt", "name", "steps", "description"]:
-                            item[key] = self._sanitize_llm_output(value) # İkinci kez sanitize et
+                        if isinstance(value, str) and key in keys_to_sanitize:
+                            item[key] = self._sanitize_llm_output(value)
 
-            print("👍 JSON planı başarıyla parse edildi ve içerik sanitize edildi (Strict Mode).")
+            logger.info("👍 JSON planı başarıyla parse edildi ve içerik sanitize edildi (Strict Mode).")
             return action_plan_list
 
-        except json.JSONDecodeError:
-            print("⚠️ Standart JSON parse edilemedi, Python literal denemesi yapılıyor...")
+        except json.JSONDecodeError as e_json:
+            logger.warning(f"⚠️ Standart JSON parse edilemedi (json.loads): {e_json}. Denenen metin: {processed_json_str[:200]}. Python literal denemesi yapılıyor...")
             try:
-                # Python literal ayrıştırıcısı için de ilk sanitize edilmiş metni kullan
-                action_plan_list = ast.literal_eval(clean_json_str)
+                action_plan_list = ast.literal_eval(processed_json_str)
                 if not isinstance(action_plan_list, list):
-                    action_plan_list = [action_plan_list]
+                     action_plan_list = [action_plan_list]
 
+                # Adım 4 (tekrar): Parse edilmiş JSON içindeki metin alanlarını sanitize et (Plan Adım 2.4 - Doğrulama)
                 for item in action_plan_list:
                      if isinstance(item, dict):
                         for key, value in item.items():
-                            if isinstance(value, str) and key in ["thought", "content", "question", "summary", "query", "text", "command", "url", "filename", "code", "scenario", "prompt", "name", "steps", "description"]:
-                                item[key] = self._sanitize_llm_output(value) # İkinci kez sanitize et
+                            if isinstance(value, str) and key in keys_to_sanitize: # Use the same keys_to_sanitize list
+                                item[key] = self._sanitize_llm_output(value)
 
-                print("👍 JSON planı başarıyla parse edildi ve içerik sanitize edildi (Flexible Mode).")
+                logger.info("👍 JSON planı başarıyla parse edildi ve içerik sanitize edildi (Flexible Mode - ast.literal_eval).")
                 return action_plan_list
-            except (ValueError, SyntaxError, MemoryError, TypeError) as e:
-                # Bu da başarısız olursa, planın bozuk olduğunu kabul et.
-                # Loglarken, LLM'den gelen orijinal, henüz hiç sanitize edilmemiş response_text'i değil,
-                # SADECE İLK genel sanitize edilmiş halini değil, üzerinde temizleme işlemi yapılmış `clean_json_str`i logla.
-                print(f"❌ Esnek parse etme de başarısız oldu: {e}")
+            except (ValueError, SyntaxError, MemoryError, TypeError) as e_ast:
+                # Plan Adım 2.5: İyileştirilmiş Fallback Loglaması
+                fallback_thought = f"(JSON planı parse edilemedi. Ayrıştırma denenen son metin: {processed_json_str[:400]})"
+                logger.error(f"❌ Esnek parse etme (ast.literal_eval) de başarısız oldu: {e_ast}. {fallback_thought}")
                 return [{"action": "CONTINUE_INTERNAL_MONOLOGUE",
-                         "thought": f"(Tamamen anlaşılmayan bir eylem planı ürettim, format bozuk. Ayrıştırma denenen metin: {clean_json_str[:400]})",
-                         "content": f"(Tamamen anlaşılmayan bir eylem planı ürettim. Düşünmeye devam ediyorum.)"}]
+                         "thought": fallback_thought,
+                         "content": "Düşüncelerimi topluyorum, bir sonraki adımımı planlayacağım."}]
 
     # YENİ METOT: EnhancedAybar sınıfına ekleyin
     def _check_for_guardian_logs(self):
@@ -2407,7 +2494,7 @@ class EnhancedAybar:
             f"{last_observation}\n\n"
 
             f"========================================\n"
-            f"--- EYLEM PLANI (Sadece JSON listesi olarak, başka hiçbir şey yazma!) ---\n"
+            f"--- EYLEM PLANI (Sadece ham JSON listesi veya tek bir JSON nesnesi olarak döndür. Cevabının başında veya sonunda ```json ... ``` bloğu olmasına GEREK YOKTUR. Başka hiçbir metin veya açıklama ekleme!) ---\n"
         )
         return full_prompt
 
