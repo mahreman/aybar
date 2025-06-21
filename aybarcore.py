@@ -19,7 +19,8 @@ import ast
 import astor 
 import base64
 from duckduckgo_search import DDGS 
-import pyttsx3
+# import pyttsx3 # pyttsx3 artık kullanılmayacak gibi, elevenlabs tercih ediliyor.
+from elevenlabs import play, stream # stream eklendi, eğer kullanılacaksa.
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
@@ -2296,7 +2297,7 @@ class EnhancedAybar:
             f"3.  `WEB_CLICK`: Web sayfasındaki elemente tıkla. Parametreler: target_xpath, thought\n"
             f"4.  `WEB_TYPE`: Web sayfasındaki alana yazı yaz. Parametreler: target_xpath, text, thought\n"
             f"5.  `FINISH_GOAL`: Mevcut hedefi tamamla. Parametreler: summary (hedefin özeti), thought\n"
-            f"6.  `ASK_USER`: Kullanıcıya soru sor. Parametreler: question, is_first_contact (true/false), use_voice (true/false)\n"
+            f"6.  `ASK_USER`: Kullanıcıya soru sor. Parametreler: question\n" # is_first_contact ve use_voice kaldırıldı
             f"7.  `USE_LEGACY_TOOL`: Özel sistem araçlarını kullan. Parametreler: command (örn: \"[TOOL_NAME: parametreler]\"), thought\n"
             f"      (Desteklenen araçlar: [UPDATE_IDENTITY], [RUN_SIMULATION], [REFLECT], [EVOLVE], [ANALYZE_MEMORY], [SET_GOAL], [CREATE], [REGULATE_EMOTION], [INTERACT], [META_REFLECT], [SEE_SCREEN], [MOUSE_CLICK], [KEYBOARD_TYPE])\n"
             f"      (NOT: [SEARCH] aracı `Maps_OR_SEARCH` ile birleşti, doğrudan [SEARCH] kullanma.)\n"
@@ -2863,40 +2864,63 @@ if __name__ == "__main__":
     if "--rollback" in sys.argv:
         print("--- Geri Yükleme Modu ---")
         # Aybar'ın bir örneğini sadece evrim sistemine erişmek için oluştur
-        temp_aybar = EnhancedAybar()
-        temp_aybar.evolution_system.rollback_from_backup()
-        # Geri yükleme işleminden sonra programdan çık
+        temp_aybar = EnhancedAybar() # Bu, __init__ içinde identity_prompt yüklemeye çalışacak.
+        if hasattr(temp_aybar, 'evolution_system') and temp_aybar.evolution_system:
+            temp_aybar.evolution_system.rollback_from_backup()
+        else:
+            print("⚠️ Rollback için Evrim Sistemi bulunamadı veya başlatılamadı.")
         sys.exit(0)
 
-    input_queue = queue.Queue()
+    # input_queue ve user_input_thread kaldırıldı.
 
-    def user_input_thread(q):
-        """Kullanıcı girdisini dinleyen ve kuyruğa ekleyen bağımsız iplik."""
-        print("\nAybar kendi kendine düşünüyor... Konuşmaya dahil olmak için bir şeyler yazıp Enter'a basın.")
-        while True:
-            try:
-                user_text = input()
-                q.put(user_text)
-            except EOFError:
-                break
+    # AUTHORIZED_CHAT_ID_STR script başında tanımlanmalı
+    AUTHORIZED_CHAT_ID_STR = os.getenv("AUTHORIZED_CHAT_ID")
+    if not AUTHORIZED_CHAT_ID_STR:
+        print("⚠️ Uyarı: AUTHORIZED_CHAT_ID ortam değişkeni ayarlanmamış. Telegram etkileşimi kısıtlı olabilir.")
+        # AUTHORIZED_CHAT_ID_STR = "default_telegram_user" # Ya da bir varsayılan ata, test için.
 
-    # --- NİHAİ OTONOM MİMARİ ---
-    # --- NİHAİ AJAN MİMARİSİ: BEYİN-VÜCUT AYRIMI ---
     print("🚀 Geliştirilmiş Aybar Simülasyonu Başlatılıyor")
     aybar = EnhancedAybar()
     
-    user_input = None
-    active_goal = None
-    active_user_id = None
+    user_input = None # Her tur başında sıfırlanacak
+    active_goal = None # Bu değişken artık doğrudan yönetilmiyor gibi, cognitive_system içinde
+    active_user_id = None # Her mesaj geldiğinde to_aybar.txt'den alınacak/güncellenecek
     last_observation = "Simülasyon yeni başladı. İlk hedefimi belirlemeliyim."
-    predicted_user_emotion = None
+    predicted_user_emotion = None # Her tur başında sıfırlanacak
     
     try:
         while aybar.current_turn < aybar.config.MAX_TURNS:
-            session_id = active_user_id or "Otonom Düşünce" # active_user_id burada tanımlanıyor
+            user_input = None # Her tur başında kullanıcı girdisini sıfırla
+            # active_user_id de burada sıfırlanabilir veya mesaj geldiğinde üzerine yazılır.
+            # Şimdilik mesaj geldiğinde üzerine yazılması yeterli.
+
+            session_id = active_user_id or "Otonom Düşünce"
             print(f"\n===== TUR {aybar.current_turn + 1}/{aybar.config.MAX_TURNS} (Oturum: {session_id}) =====")
 
-            # CAPTCHA için insan yardımı bekleme mantığı (döngünün en başına eklendi)
+            # Yeni File-Based Input Logic
+            if os.path.exists("to_aybar.txt"):
+                try:
+                    with open("to_aybar.txt", "r", encoding="utf-8") as f:
+                        user_input_from_file = f.read().strip()
+
+                    if user_input_from_file:
+                        user_input = user_input_from_file
+                        # active_user_id AUTHORIZED_CHAT_ID_STR'den alınacak.
+                        # Eğer telegram_interface.py yetkisiz mesajları zaten filtreliyorsa,
+                        # buraya gelen her mesaj yetkili kullanıcıdandır.
+                        active_user_id = AUTHORIZED_CHAT_ID_STR if AUTHORIZED_CHAT_ID_STR else "telegram_user"
+                        aybar.cognitive_system.get_or_create_social_relation(active_user_id) # İlişkiyi oluştur/getir
+                        last_observation = f"Telegram'dan yeni mesaj alındı: '{user_input[:70]}...'"
+                        predicted_user_emotion = None
+                        print(f"📬 Telegram'dan Gelen Mesaj ({active_user_id}): {user_input}")
+
+                    os.remove("to_aybar.txt")
+                    print(f"📄 to_aybar.txt işlendi ve silindi.")
+                except Exception as e:
+                    print(f"⚠️ to_aybar.txt okunurken/silinirken hata: {e}")
+                    last_observation = f"to_aybar.txt işlenirken bir hata oluştu: {e}"
+
+            # CAPTCHA için insan yardımı bekleme mantığı
             if aybar.is_waiting_for_human_captcha_help:
                 print(f"🤖 Aybar ({aybar.current_turn}. tur) CAPTCHA için insan yardımını bekliyor. URL: {aybar.last_web_url_before_captcha}")
                 print("Lütfen CAPTCHA'yı çözüp 'devam et' veya 'devam' yazın.")
@@ -2937,7 +2961,7 @@ if __name__ == "__main__":
                     # is_waiting_for_human_captcha_help hala true olacağı için tekrar beklemeye girer.
                 continue # Döngünün başına dön, normal işlem akışını bu tur için atla.
 
-            
+
             # Periyodik/Duruma Bağlı Öz-Yansıma ve Evrim Tetikleyicisi
             # CAPTCHA bekleme durumunda değilsek bu kısım çalışır.
             if not aybar.is_waiting_for_human_captcha_help and aybar.current_turn > 0 and \
@@ -3032,64 +3056,20 @@ if __name__ == "__main__":
                     print(f"🤖 Aybar (İç Monolog): {response_content}")
                     last_observation = f"Şunu düşündüm: {response_content[:100]}..."
                 
-                # DEĞİŞTİRİLDİ: Tanışma mantığı artık bu blok içinde
                 elif action_type == "ASK_USER":
                     prompt_text = action_item.get("question", "Seni dinliyorum...")
-                    
-                    if action_item.get("use_voice", True) and aybar.speaker_system.engine:
-                        aybar.speaker_system.speak(prompt_text, aybar.emotional_system.emotional_state)
-                    
-                    user_response = input(f"🤖 Aybar: {prompt_text}\n👤 {active_user_id or 'Gözlemci'} > ")
-                    
-                    # YENİ: Zihin Teorisi - Kullanıcının cevabının duygusunu analiz et
-                    if user_response.strip():
-                        user_emotion_analysis = aybar.emotion_engine.analyze_emotional_content(user_response)
-                        if user_emotion_analysis:
-                            predicted_user_emotion = max(user_emotion_analysis, key=user_emotion_analysis.get)
-                            print(f"🕵️  Kullanıcı Duygu Tahmini: {predicted_user_emotion}")
-                    
-                    # Tanışma Protokolü
-                    if action_item.get("is_first_contact", False):
-                        original_user_response = user_response.strip()
-                        active_user_id_candidate = original_user_response
-
-                        if len(original_user_response.split()) > 3:
-                            print(f"🤖 Kullanıcının ilk yanıtı ('{original_user_response[:50]}...') takma ad için çok uzun. LLM'den kısa bir takma ad isteniyor...")
-                            nickname_prompt = f"Bu metinden '{original_user_response[:100]}...' bu kişi için uygun, tek kelimelik veya en fazla iki kelimelik kısa bir takma ad (nickname) türet. Sadece takma adı döndür, başka hiçbir açıklama yapma."
-                            suggested_nickname_raw = aybar.ask_llm(nickname_prompt, temperature=0.5, max_tokens=20)
-
-                            if "⚠️" in suggested_nickname_raw:
-                                print(f"⚠️ LLM takma ad üretirken hata verdi: {suggested_nickname_raw}. Orijinal yanıtın bir kısmı kullanılacak.")
-                                active_user_id_candidate = "_".join(original_user_response.split()[:2]).replace(" ", "_")
-                            else:
-                                suggested_nickname_cleaned = aybar._sanitize_llm_output(suggested_nickname_raw).strip()
-                                suggested_nickname_cleaned = re.sub(r"^(Takma ad:|Nickname:|Ad:|İsim:)\s*", "", suggested_nickname_cleaned, flags=re.IGNORECASE).strip()
-                                suggested_nickname_cleaned = suggested_nickname_cleaned.replace('"', '').replace("'", "").replace(".", "").replace(",", "")
-
-                                if suggested_nickname_cleaned and len(suggested_nickname_cleaned.split()) <= 2:
-                                    print(f"🤖 LLM'den önerilen takma ad: '{suggested_nickname_cleaned}'")
-                                    active_user_id_candidate = suggested_nickname_cleaned.replace(" ", "_")
-                                else:
-                                    print(f"⚠️ LLM uygun bir takma ad üretemedi ('{suggested_nickname_cleaned}'). Orijinal yanıtın bir kısmı kullanılacak.")
-                                    active_user_id_candidate = "_".join(original_user_response.split()[:2]).replace(" ", "_")
-
-                        if not active_user_id_candidate: # Ensure it's not empty
-                            active_user_id_candidate = "Yeni_Dost"
-
-                        active_user_id = active_user_id_candidate
-                        aybar.cognitive_system.get_or_create_social_relation(active_user_id)
-                        response_content = f"Tanıştığımıza memnun oldum, {active_user_id}."
-                        print(f"👋 Aybar artık sizi '{active_user_id}' olarak tanıyor.")
-                        user_input = response_content
-                        last_observation = f"'{active_user_id}' adlı yeni bir varlıkla tanıştım."
-                    else:
-                        # Normal Sohbet
-                        user_input = user_response if user_response.strip() else "(sessizlik)"
-                        last_observation = f"Kullanıcıya soru sordum ve '{user_input}' cevabını aldım."
-                        response_content = "Cevabını aldım, şimdi düşünüyorum."
-
+                    try:
+                        with open("from_aybar.txt", "w", encoding="utf-8") as f:
+                            f.write(prompt_text)
+                        response_content = f"Mesaj Telegram'a gönderilmek üzere '{prompt_text[:50]}...' from_aybar.txt dosyasına yazıldı."
+                        last_observation = response_content
+                        print(f"📤 Aybar'dan Telegram'a Mesaj: {prompt_text}")
+                    except Exception as e:
+                        response_content = f"from_aybar.txt dosyasına yazılırken hata oluştu: {e}"
+                        last_observation = response_content
+                        print(f"⚠️ {response_content}")
+                    # user_input burada None kalmalı, bir sonraki turda to_aybar.txt'den okunacak.
                 
-                # YENİ EKLENDİ: Döngü Kırma ve Sıfırlama Eylemi
                 elif action_type == "SUMMARIZE_AND_RESET":
                     response_content = "Bir an... Düşüncelerimi toparlıyorum ve yeniden odaklanıyorum."
                     print(f"🔄 {response_content}")

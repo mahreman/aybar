@@ -9,10 +9,11 @@ import datetime
 import json
 
 # Yönetilecek ana betiğin adı
-MAIN_SCRIPT = "aybar_core6.py"
+MAIN_SCRIPT = "aybar_core6.py" # aybarcore.py olarak güncellenmişti, tutarlılık için kontrol et
 # Arka planda çalışacak servislerin adları
 HARDWARE_API_SCRIPT = "hardware_api.py"
 VISION_SENSOR_SCRIPT = "vision_sensor.py"
+TELEGRAM_INTERFACE_SCRIPT = "telegram_interface.py"
 
 def backup_script(source_path):
     """Ana betiğin yedeğini alır."""
@@ -69,19 +70,37 @@ def read_output(pipe, prefix):
 
 
 if __name__ == "__main__":
-    background_processes = []
+    background_processes = [] # Ensure it's initialized here
     
     try:
         # Adım 1: Arka plan servislerini başlat
-        if os.path.exists(HARDWARE_API_SCRIPT):
-            print(f"🦾 Donanım API'si başlatılıyor...")
+        if HARDWARE_API_SCRIPT and os.path.exists(HARDWARE_API_SCRIPT):
+            print(f"🦾 Donanım API'si ({HARDWARE_API_SCRIPT}) başlatılıyor...")
             api_process = start_process(HARDWARE_API_SCRIPT)
             background_processes.append(api_process)
-        
-        if os.path.exists(VISION_SENSOR_SCRIPT):
-            print(f"👁️  Görsel Sensör başlatılıyor...")
+        else:
+            print(f"⚠️ Donanım API script'i ({HARDWARE_API_SCRIPT}) bulunamadı veya tanımlanmadı.")
+
+        if VISION_SENSOR_SCRIPT and os.path.exists(VISION_SENSOR_SCRIPT):
+            print(f"👁️  Görsel Sensör ({VISION_SENSOR_SCRIPT}) başlatılıyor...")
             vision_process = start_process(VISION_SENSOR_SCRIPT)
             background_processes.append(vision_process)
+        else:
+            print(f"⚠️ Görsel Sensör script'i ({VISION_SENSOR_SCRIPT}) bulunamadı veya tanımlanmadı.")
+
+        # Telegram Interface Script
+        if TELEGRAM_INTERFACE_SCRIPT and os.path.exists(TELEGRAM_INTERFACE_SCRIPT):
+            print(f"💬 Telegram Arayüzü ({TELEGRAM_INTERFACE_SCRIPT}) başlatılıyor...")
+            # CREATE_NO_WINDOW Windows'a özgü, diğerleri için 0 (varsayılan)
+            creation_flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            telegram_process = subprocess.Popen([sys.executable, TELEGRAM_INTERFACE_SCRIPT],
+                                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                                text=True, creationflags=creation_flags,
+                                                encoding='utf-8', errors='replace')
+            background_processes.append(telegram_process)
+            print(f"✅ Telegram Arayüzü başarıyla başlatıldı.")
+        else:
+            print(f"⚠️ Telegram Arayüzü script'i ({TELEGRAM_INTERFACE_SCRIPT}) bulunamadı veya tanımlanmadı.")
 
         time.sleep(4) # Servislerin tam olarak başlaması için kısa bir bekleme
         print("-" * 50)
