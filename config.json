@@ -125,8 +125,8 @@
     {"id": "CONTINUOUS_LEARNING_AND_IMPROVEMENT", "description": "Strive to learn and improve capabilities and understanding, including ethical understanding, over time.", "priority": 0.5, "keywords": ["learn", "improve", "develop", "understand", "ethical growth"]}
   ],
   "telegram": {
-    "TELEGRAM_BOT_TOKEN": "YOUR_TELEGRAM_BOT_TOKEN_HERE_OR_LEAVE_EMPTY_IF_USING_ENV_VAR",
-    "AUTHORIZED_CHAT_ID": "YOUR_AUTHORIZED_CHAT_ID_HERE_OR_LEAVE_EMPTY_IF_USING_ENV_VAR",
+    "TELEGRAM_BOT_TOKEN": "Y5434667248:AAG6i_nC-n9wJWBifhzcNWiN5-870ntNd8A",
+    "AUTHORIZED_CHAT_ID": "1067841885",
     "bot": {
       "token": "5434667248:AAG6i_nC-n9wJWBifhzcNWiN5-870ntNd8A",
       "authorized_chat_id": 1067841885,
