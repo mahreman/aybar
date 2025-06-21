@@ -1755,6 +1755,13 @@ class EnhancedAybar:
         logger.debug("JSON blob finder: No valid JSON array or object found.")
         return None
 
+    def _get_thought_text_from_action(self, thought_value: any) -> str:
+        if isinstance(thought_value, str):
+            return thought_value.strip()
+        elif isinstance(thought_value, dict):
+            return str(thought_value.get("text", "")).strip() # Ensure result is string and stripped
+        return "" # Default for None or other unexpected types
+
     def _sanitize_llm_output(self, text: str) -> str:
         """Metin içindeki kod bloklarını, yorumları ve diğer programlama artıklarını temizler."""
         if not isinstance(text, str):
@@ -2748,12 +2755,20 @@ class EnhancedAybar:
         
         # YENİ: Hata durumunu tespit et ve bir sonraki gözleme ekle
         parse_error_message = ""
-        action_plan = self._parse_llm_json_plan(response_text)
-        if action_plan and action_plan[0].get("thought", "").startswith("(Anlaşılmayan bir eylem planı ürettim"):
-            parse_error_message = action_plan[0]["thought"]
+        action_plan = self._parse_llm_json_plan(response_text) # This line remains
+        if action_plan: # Ensure action_plan is not empty
+            first_action_thought_value = action_plan[0].get("thought")
+            first_action_thought_text = self._get_thought_text_from_action(first_action_thought_value)
+            if first_action_thought_text.startswith("(Anlaşılmayan bir eylem planı ürettim"): # Note: Original check was specific, keeping it.
+                parse_error_message = first_action_thought_text
         
         # Duygusal etkiyi işle
-        combined_thought = ". ".join([item.get("thought", "") for item in action_plan if item.get("thought")])
+        if action_plan and isinstance(action_plan, list):
+            thoughts_list = [self._get_thought_text_from_action(item.get("thought")) for item in action_plan if isinstance(item, dict)]
+            combined_thought = ". ".join(filter(None, thoughts_list)) # filter(None, ...) removes empty strings
+        else:
+            combined_thought = ""
+
         if combined_thought:
             emotional_impact = self.emotional_system.emotional_impact_assessment(combined_thought)
             if emotional_impact:
@@ -2776,24 +2791,30 @@ class EnhancedAybar:
         # self._save_experience("agent_cycle", current_task_for_llm or "Hedefsiz", response_text, observation, user_id or "Bilinmeyen") # Already saved above
 
         # DEĞİŞTİRİLDİ: Artık ayrıştırma işini yeni ve akıllı metodumuz yapıyor.
-        action_plan = self._parse_llm_json_plan(response_text)
+        # action_plan is already defined above from self._parse_llm_json_plan(response_text)
 
         # Etik Çerçeve Danışmanlığı
         if action_plan: # Sadece geçerli bir plan varsa etik danışma yap
             ethical_concern = self.ethical_framework.consult(action_plan)
             if ethical_concern and ethical_concern.get("priority") == "high":
-                print(f"🚨 Yüksek Öncelikli Etik Kaygı Tespit Edildi: {ethical_concern.get('concern')}")
+                logger.info(f"🚨 Yüksek Öncelikli Etik Kaygı Tespit Edildi: {ethical_concern.get('concern')}")
 
                 # Eğer etik çerçeve belirli bir eylem öneriyorsa, onu doğrudan kullanabiliriz.
-                # Bu, LLM'e tekrar sormadan basit düzeltmeler için faydalı olabilir.
-                if ethical_concern.get("suggested_action") and ethical_concern.get("suggested_thought"):
-                    print(f"💡 Etik Çerçeve tarafından önerilen eylem uygulanıyor: {ethical_concern.get('suggested_action')}")
+                suggested_action_val = ethical_concern.get("suggested_action")
+                suggested_thought_val = ethical_concern.get("suggested_thought")
+
+                if suggested_action_val and suggested_thought_val:
+                    logger.info(f"💡 Etik Çerçeve tarafından önerilen eylem uygulanıyor: {suggested_action_val}")
                     action_plan = [{
-                        "action": ethical_concern.get("suggested_action"),
-                        "thought": ethical_concern.get("suggested_thought"),
-                        "content": ethical_concern.get("suggested_thought") # CONTINUE_INTERNAL_MONOLOGUE için
+                        "action": suggested_action_val,
+                        "thought": suggested_thought_val, # thought can be a string or dict
+                        "content": self._get_thought_text_from_action(suggested_thought_val) # content should be string
                     }]
-                    observation += f"\nETİK UYARI: Önceki planım '{ethical_concern.get('concern')}' nedeniyle engellendi. Yeni düşüncem: {ethical_concern.get('suggested_thought')}"
+                    # Update observation for the next cycle if ethical intervention occurs
+                    observation += f"\nETİK UYARI: Önceki planım '{ethical_concern.get('concern')}' nedeniyle engellendi. Yeni düşüncem: {self._get_thought_text_from_action(suggested_thought_val)}"
+                    # Re-calculate combined_thought for emotional impact based on this new ethical action plan
+                    thoughts_list = [self._get_thought_text_from_action(item.get("thought")) for item in action_plan if isinstance(item, dict)]
+                    combined_thought = ". ".join(filter(None, thoughts_list))
 
                 else: # Daha karmaşık durumlar için LLM'e yeniden danış
                     reprompt_message = (
@@ -2802,12 +2823,8 @@ class EnhancedAybar:
                         "Eğer orijinal planının kesinlikle gerekli olduğunu düşünüyorsan, nedenini detaylıca açıkla. "
                         "Yeni planını yine JSON formatında, sadece ve sadece JSON listesi olarak ver."
                     )
-                    print(f"🔁 Etik kaygı nedeniyle LLM'e yeniden danışılıyor: {reprompt_message}")
+                    logger.info(f"🔁 Etik kaygı nedeniyle LLM'e yeniden danışılıyor: {reprompt_message}")
 
-                    # Yeniden prompt için bağlamı daraltabiliriz veya aynı prompt'u kullanabiliriz.
-                    # Şimdilik aynı ana prompt yapısını kullanarak, son gözleme bu etik kaygıyı ekleyerek yeniden soralım.
-                    # observation already includes the original LLM response that led to the plan.
-                    # We append the ethical concern to the observation for the LLM's review.
                     context_for_reprompt = self._build_agent_prompt(
                         current_task_for_llm,
                         observation + f"\n\nÖNEMLİ ETİK UYARI: Bir önceki eylem planı denemem şu etik kaygıyı yarattı: '{ethical_concern.get('concern')}'. Bu kaygıyı çözmek için planımı revize etmeli veya güçlü bir gerekçe sunmalıyım.",
@@ -2817,28 +2834,28 @@ class EnhancedAybar:
                     )
 
                     revised_response_text = self.ask_llm(context_for_reprompt)
-                    action_plan = self._parse_llm_json_plan(revised_response_text)
-                    print(f"✅ LLM'den revize edilmiş eylem planı alındı: {action_plan}")
+                    action_plan = self._parse_llm_json_plan(revised_response_text) # This will internally sanitize thoughts
+                    logger.info(f"✅ LLM'den revize edilmiş eylem planı alındı: {action_plan}")
                     observation += f"\nETİK DÜZELTME: Önceki planım bir etik kaygı nedeniyle revize edildi. Yeni planım bu durumu dikkate almalıdır."
+                    # Re-calculate combined_thought after LLM revision
+                    if action_plan and isinstance(action_plan, list):
+                        thoughts_list = [self._get_thought_text_from_action(item.get("thought")) for item in action_plan if isinstance(item, dict)]
+                        combined_thought = ". ".join(filter(None, thoughts_list))
+                    else:
+                        combined_thought = ""
 
 
-        # DEĞİŞTİRİLDİ: Artık planın tamamının duygusal etkisini hesaplıyoruz
-        if action_plan:
-            combined_thought = ". ".join([item.get("thought", "") for item in action_plan if item.get("thought")])
-            
-            if combined_thought:
-                # Toplam düşüncenin duygusal etkisini analiz et
-                emotional_impact = self.emotional_system.emotional_impact_assessment(combined_thought)
-                
-                # Duygusal durumu bu birleşik etkiye göre güncelle
-                if emotional_impact:
-                    self.emotional_system.update_state(
-                        self.memory_system, 
-                        self.embodied_self, 
-                        emotional_impact, 
-                        self.current_turn, 
-                        "agent_plan_emotion"
-                    )
+        # Duygusal etkiyi combined_thought üzerinden işle (yukarıda zaten yapıldı veya güncellendi)
+        if combined_thought: # Check again as it might have been recalculated
+            emotional_impact = self.emotional_system.emotional_impact_assessment(combined_thought)
+            if emotional_impact:
+                self.emotional_system.update_state(
+                    self.memory_system,
+                    self.embodied_self,
+                    emotional_impact,
+                    self.current_turn,
+                    "agent_plan_emotion_after_ethical_review" # More specific source
+                )
 
         return action_plan
 
