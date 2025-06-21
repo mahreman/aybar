@@ -30,6 +30,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 from bs4 import BeautifulSoup
 import logging # Ensure logging is imported
+import tools # Added import for tools
+import json # Ensure json is imported
+import inspect # For tool definition generation
 
 # Global configuration dictionary
 APP_CONFIG = {}
@@ -1686,15 +1689,106 @@ class EnhancedAybar:
 
         self.is_waiting_for_human_captcha_help = False
         self.last_web_url_before_captcha: Optional[str] = None
-        
-        self.ask_llm = lru_cache(maxsize=APP_CONFIG["llm"]["LLM_CACHE_SIZE"])(self._ask_llm_uncached)
+
+        # Updated to reflect the new method name and its caching
+        self.ask_llm = lru_cache(maxsize=APP_CONFIG["llm"]["LLM_CACHE_SIZE"])(self._ask_llm_with_tools)
 
         self.ethical_framework = EthicalFramework(self)
 
         self._check_for_guardian_logs()
         self.identity_prompt = self._load_identity()
+        self.tool_definitions_for_llm = self._prepare_tool_definitions() # Initialize tool definitions
+        logger.info(f"🛠️ Prepared {len(self.tool_definitions_for_llm)} tool definitions for the LLM.")
         print(f"🧬 Aybar Kimliği Yüklendi: {self.identity_prompt[:70]}...")
         print("🚀 Geliştirilmiş Aybar Başlatıldı")
+
+    def _prepare_tool_definitions(self) -> List[Dict[str, Any]]:
+        """
+        Dynamically generates tool definitions for the LLM using introspection.
+        """
+        tool_defs = []
+        # Define which functions from tools.py are exposed to the LLM
+        # For now, let's manually list them to control exposure.
+        # Later, this could be automated with decorators or naming conventions.
+        # Ensure these names match exactly the function names in tools.py
+        tool_function_names = [
+            "maps_or_search",
+            "ask_user_via_file",
+            "update_identity",
+            "finish_goal",
+            "summarize_and_reset",
+            "creative_generation",
+            "regulate_emotion",
+            "analyze_memory",
+            "run_internal_simulation",
+            "handle_interaction",
+            "perform_meta_reflection",
+            "keyboard_type",
+            "mouse_click",
+            "analyze_screen",
+            "web_click",
+            "web_type"
+        ]
+
+        for func_name in tool_function_names:
+            if hasattr(tools, func_name):
+                func = getattr(tools, func_name)
+                if not callable(func):
+                    continue
+
+                sig = inspect.signature(func)
+                docstring = inspect.getdoc(func) or "No description available."
+
+                # Extract a concise description from the beginning of the docstring
+                description_lines = [line.strip() for line in docstring.split('\n') if line.strip()]
+                concise_description = description_lines[0] if description_lines else "No description available."
+
+
+                parameters_schema = {"type": "object", "properties": {}, "required": []}
+
+                for name, param in sig.parameters.items():
+                    if name == "aybar_instance":  # Skip internal parameters
+                        continue
+
+                    param_type_hint = param.annotation
+                    param_type_str = "string" # Default type
+                    if param_type_hint == str:
+                        param_type_str = "string"
+                    elif param_type_hint == int:
+                        param_type_str = "integer"
+                    elif param_type_hint == bool:
+                        param_type_str = "boolean"
+                    elif param_type_hint == float:
+                        param_type_str = "number"
+                    elif param_type_hint == list or param_type_hint == List:
+                        param_type_str = "array"
+                    elif param_type_hint == dict or param_type_hint == Dict:
+                        param_type_str = "object"
+
+                    # Basic description from param name if not in docstring (very rudimentary)
+                    # A more robust way would be to parse docstrings for param descriptions.
+                    param_description = f"Parameter '{name}' of type {param_type_str}"
+
+                    parameters_schema["properties"][name] = {
+                        "type": param_type_str,
+                        "description": param_description
+                    }
+                    if param.default == inspect.Parameter.empty:
+                        parameters_schema["required"].append(name)
+
+                tool_defs.append({
+                    "type": "function",
+                    "function": {
+                        "name": func_name,
+                        "description": concise_description,
+                        "parameters": parameters_schema
+                    }
+                })
+            else:
+                logger.warning(f"Tool function '{func_name}' not found in tools.py module during definition preparation.")
+
+        logger.debug(f"Generated tool definitions for LLM: {json.dumps(tool_defs, indent=2)}")
+        return tool_defs
 
     def _find_json_blob(self, text: str) -> Optional[str]:
         """
@@ -1756,65 +1850,14 @@ class EnhancedAybar:
         return None
 
     def _get_thought_text_from_action(self, thought_value: any) -> str:
+        raw_text = ""
         if isinstance(thought_value, str):
-            return thought_value.strip()
+            raw_text = thought_value.strip()
         elif isinstance(thought_value, dict):
-            return str(thought_value.get("text", "")).strip() # Ensure result is string and stripped
-        return "" # Default for None or other unexpected types
+            raw_text = str(thought_value.get("text", "")).strip() # Ensure result is string and stripped
 
-    def _sanitize_llm_output(self, text: str) -> str:
-        """Metin içindeki kod bloklarını, yorumları ve diğer programlama artıklarını temizler."""
-        if not isinstance(text, str):
-            return ""
-
-        # 1. Çok satırlı kod blokları (```python ... ```, ```json ... ```, vb.)
-        # DOTALL, '.' karakterinin yeni satırları da eşleştirmesini sağlar.
-        # [\w\s]* kısmı, ```python gibi dil belirteçlerini yakalamak içindir.
-        text = re.sub(r"```[\w\s]*\n.*?\n```", "", text, flags=re.DOTALL)
-
-        # Bazen LLM'ler sadece ``` ile başlatıp bitirmeyebilir, bu yüzden daha genel bir temizlik
-        text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
-
-        # 2. Satır başındaki yorumlar (#, //)
-        text = re.sub(r"^\s*#.*$", "", text, flags=re.MULTILINE)
-        text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
-
-        # 3. Fonksiyon ve sınıf tanımlamalarının başlangıç satırları
-        # \b kelime sınırı demektir, 'def'in 'default' gibi bir kelime içinde geçmemesini sağlar.
-        text = re.sub(r"^\s*def\s+\w+\s*\(.*?\)\s*:", "", text, flags=re.MULTILINE | re.IGNORECASE)
-        text = re.sub(r"^\s*class\s+\w+\s*(\(.*\))?\s*:", "", text, flags=re.MULTILINE | re.IGNORECASE)
-
-        # 4. Yaygın meta-yorumlar ve LLM fazlalıkları (daha fazlası eklenebilir)
-        meta_comments = [
-            "İşte istediğiniz metin:", "Elbette, buyurun:", "JSON cevabı aşağıdadır:",
-            "Aşağıdaki gibidir:", "İşte sonuç:", "İşte kod:",
-            "Ancak, bu konuda size yardımcı olabileceğim başka bir şey var mı?",
-            "Umarım bu yardımcı olur.", "Tabii, işte güncellenmiş kod:",
-            "Elbette, işte istediğiniz gibi düzenlenmiş kod:",
-            "Anladım.", "Tamamdır.", "Peki.", "Elbette.", "İşte istediğiniz gibi:",
-            "JSON formatında:", "Örnek:", "Açıklama:", "Not:", "Cevap:", "Soru:",
-            "Kullanıcının sorusu:", "Aybar'ın cevabı:", "İşte size bir örnek:",
-            "Aşağıda bulabilirsiniz:", "Bu kod parçacığı...", "Bu metin...",
-            "I hope this is helpful!", "Here is the code:", "Here is the text:",
-            "The code above...", "The text above...", "This will...", "This should...",
-            "Please find below...", "As requested:", "Sure, here you go:",
-            "Okay, I understand.", "Got it.", "Certainly.",
-            "The JSON response is as follows:", "For example:", "Explanation:", "Note that:"
-        ]
-        for comment in meta_comments:
-            # re.escape, yorum içindeki özel regex karakterlerini düzgün işlemesini sağlar.
-            text = re.sub(re.escape(comment), "", text, flags=re.IGNORECASE)
-            # Satır başında, muhtemel boşluk veya özel karakterlerle başlayanları da temizle
-            text = re.sub(r"^\s*[\W_]*" + re.escape(comment), "", text, flags=re.IGNORECASE | re.MULTILINE)
-
-        # 5. Sadece noktalama işaretleri veya çok kısa alfanümerik olmayan satırları temizle
-        text = re.sub(r"^\s*[\W_]{1,5}\s*$", "", text, flags=re.MULTILINE)
-
-        # 6. Yeni satırları normalleştir ve baştaki/sondaki boşlukları temizle
-        text = re.sub(r"\n\s*\n+", "\n", text) # Birden fazla yeni satırı (arada boşluk olsa bile) tek birine indir
-        text = text.strip()
-
-        return text
+        # Sanitize the extracted text before returning
+        return self._sanitize_llm_output(raw_text) if raw_text else "" # Default for None or other unexpected types
 
     def _load_identity(self, context_type: str = 'general') -> str:
         """Veritabanından aktif kimlik prompt'unu yükler."""
@@ -1848,8 +1891,9 @@ class EnhancedAybar:
         # Önce LLM çıktısını genel olarak sanitize et (istenmeyen meta yorumlar vb.)
         # Bu, JSON yapısını bozabilecek dışsal metinleri temizler.
         # ÖNEMLİ: Ham LLM çıktısını ilk olarak burada genel olarak sanitize ediyoruz.
-        sanitized_text = self._sanitize_llm_output(response_text)
-        logger.debug(f"Sanitized LLM output for JSON parsing: {sanitized_text[:200]}...")
+        logger.debug(f"Raw LLM output for JSON parsing (first 200 chars): {response_text[:200]}...")
+        sanitized_text = self._sanitize_llm_output(response_text) # Görev tanımına göre eklendi
+        logger.debug(f"Sanitized LLM output for JSON parsing (first 200 chars): {sanitized_text[:200]}...")
 
         # Adım 1: En dıştaki JSON array veya object'i bulmaya çalışalım.
         json_blob_candidate = self._find_json_blob(sanitized_text)
@@ -1972,25 +2016,30 @@ class EnhancedAybar:
             # Log dosyasını tekrar işlememek için sil
             os.remove(log_file)
 
-    # === FUNCTION START ===
-    # _ask_llm_uncached metodunu bu yeni versiyonla değiştirin
-    def _ask_llm_uncached(self, prompt: str, model_name: Optional[str] = None, max_tokens: int = None, temperature: float = 0.4) -> str:
-        """LLM'ye sorgu gönderir ve hata durumunda hata mesajını döndürür."""
-        
-        # Temperature ayarını daha düşük bir değere çekerek modelin kararlılığını artırdık.
-        
+    # Renamed from _ask_llm_uncached and updated for tool support
+    def _ask_llm_with_tools(self, prompt: str, model_name: Optional[str] = None,
+                            max_tokens: int = None, temperature: float = 0.4,
+                            tools_definitions: Optional[List[Dict]] = None) -> Union[str, List[Dict[str, Any]]]:
+        """
+        Sends a query to the LLM, potentially with tool definitions, and processes the response.
+        Can return either a text string or a list of tool call dictionaries.
+        """
         payload = {
-            "prompt": prompt, 
+            "prompt": prompt,
             "max_tokens": max_tokens or APP_CONFIG["llm"]["MAX_TOKENS"],
-            "temperature": temperature
+            "temperature": temperature,
+            # "stream": False # Assuming non-streaming for now for tool calls
         }
-        
-        # Sadece özel bir model (Mühendis Beyin gibi) istendiğinde model parametresini ekle.
-        # Bu, varsayılan model çağrılarında 400 hatası alma riskini azaltır.
         if model_name:
             payload["model"] = model_name
 
+        if tools_definitions and isinstance(tools_definitions, list) and len(tools_definitions) > 0:
+            payload["tools"] = tools_definitions
+            payload["tool_choice"] = "auto" # Common default, might need API-specific value
+            logger.info(f"LLM call includes tools: {[tool.get('function', {}).get('name') for tool in tools_definitions]}")
+
         try:
+            logger.debug(f"LLM API Request Payload: {json.dumps(payload, indent=2)}")
             response = requests.post(
                 APP_CONFIG["llm"]["LLM_API_URL"],
                 headers={"Content-Type": "application/json"},
@@ -1999,16 +2048,71 @@ class EnhancedAybar:
             )
             response.raise_for_status()
             json_response = response.json()
+            logger.debug(f"LLM API Raw Response: {json.dumps(json_response, indent=2)}")
+
             choices = json_response.get('choices')
             if choices and isinstance(choices, list) and len(choices) > 0:
-                text = choices[0].get('text')
-                if text is not None: return text.strip()
-            return f"⚠️ LLM Format Hatası: {str(json_response)[:200]}"
-        except requests.exceptions.RequestException as e:
-            return f"⚠️ LLM Bağlantı Hatası: {e}"
-        except Exception as e:
-            return f"⚠️ LLM Genel Hatası: {type(e).__name__} - {e}"
-    # === FUNCTION END ===
+                choice = choices[0]
+                message = choice.get('message') # OpenAI-like structure
+
+                if message and isinstance(message, dict):
+                    # Check for tool calls (OpenAI-like)
+                    tool_calls_data = message.get('tool_calls')
+                    if tool_calls_data and isinstance(tool_calls_data, list):
+                        processed_tool_calls = []
+                        for call_data in tool_calls_data:
+                            if call_data.get('type') == 'function': # Assuming 'function' type for tools
+                                function_info = call_data.get('function')
+                                if function_info and isinstance(function_info, dict):
+                                    name = function_info.get('name')
+                                    arguments_str = function_info.get('arguments')
+                                    call_id = call_data.get("id") # Get the tool_call_id
+                                    if name and arguments_str and call_id:
+                                        try:
+                                            arguments_dict = json.loads(arguments_str)
+                                            processed_tool_calls.append({
+                                                "id": call_id,
+                                                "name": name,
+                                                "arguments": arguments_dict
+                                            })
+                                        except json.JSONDecodeError as e:
+                                            logger.error(f"Failed to parse tool arguments for '{name}' (ID: {call_id}): {e}. Arguments: {arguments_str}")
+                                            # Return an error string or a special structure indicating this failure
+                                            return f"⚠️ LLM Tool Argument JSONDecodeError: {e} in arguments for tool {name} (ID: {call_id}). Arguments: {arguments_str}"
+                                    else:
+                                        logger.warning(f"Incomplete tool call data received: Name={name}, HasArgs={arguments_str is not None}, ID={call_id}")
+                        if processed_tool_calls:
+                            logger.info(f"LLM requested tool calls: {processed_tool_calls}")
+                            return processed_tool_calls # Return list of processed tool calls
+
+                    # If no tool_calls, or they were not processed, try to get content (text response)
+                    content = message.get('content')
+                    if content is not None:
+                        logger.info("LLM returned text content.")
+                        return str(content).strip()
+
+                # Fallback for non-OpenAI-like structures that might have 'text' directly in choice
+                text_content = choice.get('text')
+                if text_content is not None:
+                    logger.info("LLM returned direct text content in choice['text'].")
+                    return str(text_content).strip()
+
+            # If the structure is completely unexpected but was a valid JSON response from server
+            logger.warning(f"LLM response format not fully recognized. Full response: {str(json_response)[:500]}")
+            return f"⚠️ LLM Format Hatası: Yanıtta 'choices', 'message', 'content' veya 'text' anahtarları beklenen yapıda bulunamadı: {str(json_response)[:200]}"
+
+        except requests.exceptions.Timeout as e_timeout:
+            logger.error(f"LLM API isteği zaman aşımına uğradı: {e_timeout}")
+            return f"⚠️ LLM Bağlantı Hatası: Zaman aşımı ({e_timeout})"
+        except requests.exceptions.RequestException as e_req:
+            logger.error(f"LLM API isteği sırasında hata: {e_req}")
+            return f"⚠️ LLM Bağlantı Hatası: {e_req}"
+        except json.JSONDecodeError as e_json: # Error decoding the LLM's response
+            logger.error(f"LLM API'den gelen yanıt JSON formatında değil: {e_json}. Yanıt metni (ilk 500 char): {response.text[:500] if response else 'Yanıt yok'}")
+            return f"⚠️ LLM Yanıt Format Hatası: JSON parse edilemedi. Yanıt: {response.text[:200] if response else 'Yanıt yok'}"
+        except Exception as e_gen:
+            logger.error(f"LLM çağrısı sırasında genel bir hata oluştu: {e_gen}", exc_info=True)
+            return f"⚠️ LLM Genel Hatası: {type(e_gen).__name__} - {e_gen}"
 
     # YENİ METOT: EnhancedAybar sınıfına ekleyin
     def _update_identity(self) -> str:
@@ -2118,50 +2222,50 @@ class EnhancedAybar:
 
 
     # EnhancedAybar sınıfındaki bu metodu tamamen değiştirin
-    def _perform_internet_search(self, query: str) -> str:
-        """
-        Belirtilen sorgu için DuckDuckGo kullanarak internette arama yapar ve sonuçları özetler.
-        """
-        print(f"🌐 İnternette araştırılıyor: '{query}'")
-        try:
-            # duckduckgo_search kütüphanesini kullanarak arama yapıyoruz.
-            # max_results=5, arama sonucunda ilk 5 özeti alacağımızı belirtir.
-            with DDGS() as ddgs:
-                search_results = list(ddgs.text(query, max_results=5))
-    
-        except Exception as e:
-            print(f"⚠️ Arama sırasında bir hata oluştu: {e}")
-            return f"Arama sırasında bir hata oluştu: {e}"
-    
-        if not search_results:
-            return "Arama sonucunda bir şey bulunamadı."
-    
-        # Arama sonuçlarını LLM'in özetlemesi için bir araya getir
-        context_for_summary = f"Arama sorgusu: '{query}'\n\nBulunan Sonuçlar:\n"
-        for result in search_results:
-            context_for_summary += f"- Başlık: {result.get('title', 'N/A')}\n"
-            context_for_summary += f"  İçerik Özeti: {result.get('body', 'N/A')}\n\n"
-    
-        # Sonuçları özetlemek için LLM'i kullan
-        summary_prompt = f"""
-        Aşağıdaki internet arama sonuçlarını analiz et. Bu sonuçlardan yola çıkarak, "{query}" sorgusuna verilecek net, kısa ve bilgilendirici bir cevap oluştur. Cevabı direkt olarak yaz, özet olduğunu belirtme.
-    
-        --- ARAMA SONUÇLARI ---
-        {context_for_summary[:8000]} 
-        --- ÖZET CEVAP ---
-        """
-    
-        summary = self.ask_llm(summary_prompt, max_tokens=1024, temperature=0.5)
-    
-        if summary:
-            # Öğrenilen bilgiyi semantik belleğe kaydet
-            self.memory_system.add_memory("semantic", {
-                "timestamp": datetime.now().isoformat(), "turn": self.current_turn,
-                "insight": f"İnternet araştırması sonucu öğrenilen bilgi: {summary}", "source": "internet_search", "query": query
-            })
-            return summary
-        else:
-            return "Arama sonuçları özetlenirken bir sorun oluştu."
+    # def _perform_internet_search(self, query: str) -> str:
+    #     """
+    #     Belirtilen sorgu için DuckDuckGo kullanarak internette arama yapar ve sonuçları özetler.
+    #     """
+    #     print(f"🌐 İnternette araştırılıyor: '{query}'")
+    #     try:
+    #         # duckduckgo_search kütüphanesini kullanarak arama yapıyoruz.
+    #         # max_results=5, arama sonucunda ilk 5 özeti alacağımızı belirtir.
+    #         with DDGS() as ddgs:
+    #             search_results = list(ddgs.text(query, max_results=5))
+    #
+    #     except Exception as e:
+    #         print(f"⚠️ Arama sırasında bir hata oluştu: {e}")
+    #         return f"Arama sırasında bir hata oluştu: {e}"
+    #
+    #     if not search_results:
+    #         return "Arama sonucunda bir şey bulunamadı."
+    #
+    #     # Arama sonuçlarını LLM'in özetlemesi için bir araya getir
+    #     context_for_summary = f"Arama sorgusu: '{query}'\n\nBulunan Sonuçlar:\n"
+    #     for result in search_results:
+    #         context_for_summary += f"- Başlık: {result.get('title', 'N/A')}\n"
+    #         context_for_summary += f"  İçerik Özeti: {result.get('body', 'N/A')}\n\n"
+    #
+    #     # Sonuçları özetlemek için LLM'i kullan
+    #     summary_prompt = f"""
+    #     Aşağıdaki internet arama sonuçlarını analiz et. Bu sonuçlardan yola çıkarak, "{query}" sorgusuna verilecek net, kısa ve bilgilendirici bir cevap oluştur. Cevabı direkt olarak yaz, özet olduğunu belirtme.
+    #
+    #     --- ARAMA SONUÇLARI ---
+    #     {context_for_summary[:8000]}
+    #     --- ÖZET CEVAP ---
+    #     """
+    #
+    #     summary = self.ask_llm(summary_prompt, max_tokens=1024, temperature=0.5)
+    #
+    #     if summary:
+    #         # Öğrenilen bilgiyi semantik belleğe kaydet
+    #         self.memory_system.add_memory("semantic", {
+    #             "timestamp": datetime.now().isoformat(), "turn": self.current_turn,
+    #             "insight": f"İnternet araştırması sonucu öğrenilen bilgi: {summary}", "source": "internet_search", "query": query
+    #         })
+    #         return summary
+    #     else:
+    #         return "Arama sonuçları özetlenirken bir sorun oluştu."
 
     # YENİ METOT: EnhancedAybar sınıfının içine ekleyin
     def _perform_meta_reflection(self, turn_to_analyze: int, thought_to_analyze: str) -> str:
@@ -2362,8 +2466,13 @@ class EnhancedAybar:
         text = re.sub(r"^\s*[\w\\/\.-]+:\s*", "", text, flags=re.MULTILINE) # e.g. C:\... or /usr/bin...
         text = re.sub(r"^\s*com\.example\.android\..*$", "", text, flags=re.MULTILINE | re.IGNORECASE)
 
+        # Additional step: Clean function/class definition starting lines (from the first sanitizer)
+        text = re.sub(r"^\s*def\s+\w+\s*\(.*?\)\s*:", "[Fonksiyon tanımı temizlendi]", text, flags=re.MULTILINE | re.IGNORECASE)
+        text = re.sub(r"^\s*class\s+\w+\s*(\(.*\))?\s*:", "[Sınıf tanımı temizlendi]", text, flags=re.MULTILINE | re.IGNORECASE)
+        text = re.sub(r"^\s*async\s+def\s+\w+\s*\(.*?\)\s*:", "[Async fonksiyon tanımı temizlendi]", text, flags=re.MULTILINE | re.IGNORECASE)
 
         # 6. Common LLM meta-comments and conversational fluff (expanded list)
+        # (Original meta_comments list from the second sanitizer is kept)
         meta_comments = [
             "İşte istediğiniz metin:", "Elbette, buyurun:", "JSON cevabı aşağıdadır:",
             "Aşağıdaki gibidir:", "İşte sonuç:", "İşte kod:",
@@ -2740,152 +2849,176 @@ class EnhancedAybar:
 
     # run_thought_cycle metodunu güncelleyin
     def run_thought_cycle(self, current_task_for_llm: str, observation: str, user_id: Optional[str], user_input: Optional[str], predicted_user_emotion: Optional[str]) -> List[Dict]:
-        """Bir hedef ve gözlem alarak bir sonraki Eylem Planını oluşturur."""
+        """
+        Manages a single thought cycle: builds a prompt, asks LLM (potentially with tools),
+        processes LLM response (text or tool call), executes tool if requested, and returns a single action
+        (usually CONTINUE_INTERNAL_MONOLOGUE) for the main loop to observe.
+        """
         self.current_turn += 1
         self.emotional_system.decay_emotions_and_update_loneliness(self.cognitive_system.social_relations, self.current_turn)
         self.cognitive_system.update_consciousness("turn")
         self.cognitive_system.update_focus_based_on_fatigue(self.emotional_system.emotional_state)
 
         if self._is_sleepy():
-            # DEĞİŞTİRİLDİ: Artık sleep_cycle'dan dönen planı doğrudan iletiyoruz.
             return self.sleep_cycle() 
         
         prompt = self._build_agent_prompt(current_task_for_llm, observation, user_id, user_input, predicted_user_emotion)
-        response_text = self.ask_llm(prompt)
-        
-        # YENİ: Hata durumunu tespit et ve bir sonraki gözleme ekle
-        parse_error_message = ""
-        action_plan = self._parse_llm_json_plan(response_text) # This line remains
-        if action_plan: # Ensure action_plan is not empty
-            first_action_thought_value = action_plan[0].get("thought")
-            first_action_thought_text = self._get_thought_text_from_action(first_action_thought_value)
-            if first_action_thought_text.startswith("(Anlaşılmayan bir eylem planı ürettim"): # Note: Original check was specific, keeping it.
-                parse_error_message = first_action_thought_text
-        
-        # Duygusal etkiyi işle
-        if action_plan and isinstance(action_plan, list):
-            thoughts_list = [self._get_thought_text_from_action(item.get("thought")) for item in action_plan if isinstance(item, dict)]
-            combined_thought = ". ".join(filter(None, thoughts_list)) # filter(None, ...) removes empty strings
-        else:
-            combined_thought = ""
 
-        if combined_thought:
-            emotional_impact = self.emotional_system.emotional_impact_assessment(combined_thought)
-            if emotional_impact:
-                self.emotional_system.update_state(self.memory_system, self.embodied_self, emotional_impact, self.current_turn, "agent_plan_emotion")
-        
-        # Deneyimi kaydederken parse hatasını da ekle
-        self._save_experience("agent_cycle", current_task_for_llm or "Hedefsiz", response_text, observation + (f"\nPARSE_HATASI: {parse_error_message}" if parse_error_message else ""), user_id or "Bilinmeyen")
-        
-        # YENİ EKLENDİ: LLM bağlantı hatası için acil durum planı
-        if "⚠️" in response_text: # This check should ideally be more robust, e.g. checking for specific error messages
-            print(f"❌ Kritik LLM Hatası tespit edildi: {response_text}")
-            self._save_experience("llm_error", current_task_for_llm or "Hedefsiz", response_text, observation, user_id or "Bilinmeyen")
-            # If LLM fails, it's better to have a fallback plan rather than trying to parse a potential error message as a plan.
-            return [{
-                "action": "CONTINUE_INTERNAL_MONOLOGUE",
-                "thought": "Beyin fonksiyonlarımda (LLM) bir hatayla karşılaştım. Sakin kalmalı ve durumu analiz etmeliyim. Belki bir süre sonra tekrar deneyebilirim.",
-                "content": "LLM bağlantı hatası nedeniyle düşüncelerimi topluyorum."
-            }]
-        
-        # self._save_experience("agent_cycle", current_task_for_llm or "Hedefsiz", response_text, observation, user_id or "Bilinmeyen") # Already saved above
+        # Call LLM with tool definitions
+        llm_output_or_error = self._ask_llm_with_tools(prompt, tools_definitions=self.tool_definitions_for_llm)
 
-        # DEĞİŞTİRİLDİ: Artık ayrıştırma işini yeni ve akıllı metodumuz yapıyor.
-        # action_plan is already defined above from self._parse_llm_json_plan(response_text)
+        # Save raw LLM output (text or tool call structure, or error string)
+        raw_response_to_save = llm_output_or_error
+        if isinstance(llm_output_or_error, list): # If it's a list of tool calls
+            raw_response_to_save = json.dumps(llm_output_or_error)
 
-        # --- Action Plan Validation ---
-        if not isinstance(action_plan, list) or not action_plan: # Check if it's a non-empty list
-            fallback_thought = f"(LLM'den gelen eylem planı bir liste değil veya boş. Alınan: {str(action_plan)[:200]})"
-            logger.warning(fallback_thought)
-            # Assuming current_task_for_llm, observation, user_id are defined earlier in run_thought_cycle
-            self._save_experience("invalid_action_plan_type", current_task_for_llm or "Hedefsiz", str(action_plan), observation, user_id or "Bilinmeyen")
-            return [{
-                "action": "CONTINUE_INTERNAL_MONOLOGUE",
-                "thought": fallback_thought,
-                "content": "Eylem planı oluşturulurken beklenmedik bir formatla karşılaşıldı. Durumu yeniden değerlendiriyorum."
-            }]
+        self._save_experience("llm_interaction_attempt", current_task_for_llm or "Hedefsiz",
+                              str(raw_response_to_save), # Ensure it's a string for DB
+                              observation, user_id or "Bilinmeyen")
 
-        # Check if the first item in the list is a dictionary
-        if not isinstance(action_plan[0], dict):
-            fallback_thought = f"(LLM'den gelen eylem planının ilk elemanı bir sözlük değil. Alınan ilk eleman: {str(action_plan[0])[:200]})"
-            logger.warning(fallback_thought)
-            self._save_experience("invalid_action_plan_item_type", current_task_for_llm or "Hedefsiz", str(action_plan), observation, user_id or "Bilinmeyen")
-            return [{
-                "action": "CONTINUE_INTERNAL_MONOLOGUE",
-                "thought": fallback_thought,
-                "content": "Eylem planındaki ilk adım anlaşılamadı. Durumu yeniden değerlendiriyorum."
-            }]
-        # --- End of Action Plan Validation ---
+        final_thought = "LLM ile etkileşim ve araç değerlendirmesi tamamlandı."
+        final_content = "Gözlemliyorum ve bir sonraki adımı düşünüyorum." # Default content
 
-        # Etik Çerçeve Danışmanlığı
-        if action_plan: # Sadece geçerli bir plan varsa etik danışma yap
-            ethical_concern = self.ethical_framework.consult(action_plan)
-            if ethical_concern and ethical_concern.get("priority") == "high":
-                logger.info(f"🚨 Yüksek Öncelikli Etik Kaygı Tespit Edildi: {ethical_concern.get('concern')}")
+        if isinstance(llm_output_or_error, str): # Direct text response from LLM or error string from _ask_llm_with_tools
+            if llm_output_or_error.startswith("⚠️ LLM"):
+                logger.error(f"LLM çağrısı başarısız: {llm_output_or_error}")
+                self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 1.5, "mental_fatigue": 0.7}, self.current_turn, "llm_call_failure")
+                final_thought = llm_output_or_error
+                # Sanitize even error messages if they become content
+                final_content = self._sanitize_llm_output("Bir iletişim hatası veya LLM sistem hatası oluştu. Bu durumu not alıyorum ve düşünmeye devam edeceğim.")
+            else:
+                logger.info("LLM'den doğrudan metin yanıtı alındı.")
+                # Sanitize the direct text response before further processing or using as content
+                response_content = self._sanitize_llm_output(llm_output_or_error)
+                emotional_impact = self.emotional_system.emotional_impact_assessment(response_content)
+                if emotional_impact:
+                    self.emotional_system.update_state(self.memory_system, self.embodied_self, emotional_impact, self.current_turn, "llm_direct_response_emotion")
+                final_thought = f"LLM yanıtı: {response_content[:120]}..."
+                final_content = response_content # Already sanitized
 
-                # Eğer etik çerçeve belirli bir eylem öneriyorsa, onu doğrudan kullanabiliriz.
-                suggested_action_val = ethical_concern.get("suggested_action")
-                suggested_thought_val = ethical_concern.get("suggested_thought")
+        elif isinstance(llm_output_or_error, list) and len(llm_output_or_error) > 0: # Tool call(s) requested
+            logger.info(f"LLM'den araç çağrıları istendi: {llm_output_or_error}")
 
-                if suggested_action_val and suggested_thought_val:
-                    logger.info(f"💡 Etik Çerçeve tarafından önerilen eylem uygulanıyor: {suggested_action_val}")
-                    action_plan = [{
-                        "action": suggested_action_val,
-                        "thought": suggested_thought_val, # thought can be a string or dict
-                        "content": self._get_thought_text_from_action(suggested_thought_val) # content should be string
-                    }]
-                    # Update observation for the next cycle if ethical intervention occurs
-                    observation += f"\nETİK UYARI: Önceki planım '{ethical_concern.get('concern')}' nedeniyle engellendi. Yeni düşüncem: {self._get_thought_text_from_action(suggested_thought_val)}"
-                    # Re-calculate combined_thought for emotional impact based on this new ethical action plan
-                    thoughts_list = [self._get_thought_text_from_action(item.get("thought")) for item in action_plan if isinstance(item, dict)]
-                    combined_thought = ". ".join(filter(None, thoughts_list))
+            # For now, process only the first tool call.
+            # Phase 2 would involve iterating, collecting results, and re-prompting LLM with tool results.
+            tool_call = llm_output_or_error[0]
+            function_name = tool_call.get('name')
+            arguments_dict = tool_call.get('arguments', {})
+            tool_call_id = tool_call.get('id') # Keep for potential future use with multi-step tool calls
 
-                else: # Daha karmaşık durumlar için LLM'e yeniden danış
-                    reprompt_message = (
-                        f"Önerdiğin eylem planı şu etik kaygıyı doğurdu: '{ethical_concern.get('concern')}'. "
-                        "Lütfen bu etik kaygıyı dikkate alarak ve gerekirse planını tamamen değiştirerek yeni bir eylem planı oluştur. "
-                        "Eğer orijinal planının kesinlikle gerekli olduğunu düşünüyorsan, nedenini detaylıca açıkla. "
-                        "Yeni planını yine JSON formatında, sadece ve sadece JSON listesi olarak ver."
-                    )
-                    logger.info(f"🔁 Etik kaygı nedeniyle LLM'e yeniden danışılıyor: {reprompt_message}")
+            if hasattr(tools, function_name) and callable(getattr(tools, function_name)):
+                tool_function = getattr(tools, function_name)
+                tool_thought = self._get_thought_text_from_action(arguments_dict.pop('thought', f"LLM called tool: {function_name}"))
 
-                    context_for_reprompt = self._build_agent_prompt(
-                        current_task_for_llm,
-                        observation + f"\n\nÖNEMLİ ETİK UYARI: Bir önceki eylem planı denemem şu etik kaygıyı yarattı: '{ethical_concern.get('concern')}'. Bu kaygıyı çözmek için planımı revize etmeli veya güçlü bir gerekçe sunmalıyım.",
-                        user_id,
-                        user_input,
-                        predicted_user_emotion
-                    )
+                logger.info(f"Araç yürütülüyor: {function_name}, Argümanlar: {arguments_dict}, Düşünce (araç için): {tool_thought} (ID: {tool_call_id})")
+                try:
+                    tool_args_for_call = {k: v for k, v in arguments_dict.items()}
+                    tool_args_for_call['aybar_instance'] = self
 
-                    revised_response_text = self.ask_llm(context_for_reprompt)
-                    action_plan = self._parse_llm_json_plan(revised_response_text) # This will internally sanitize thoughts
-                    logger.info(f"✅ LLM'den revize edilmiş eylem planı alındı: {action_plan}")
-                    observation += f"\nETİK DÜZELTME: Önceki planım bir etik kaygı nedeniyle revize edildi. Yeni planım bu durumu dikkate almalıdır."
-                    # Re-calculate combined_thought after LLM revision
-                    if action_plan and isinstance(action_plan, list):
-                        thoughts_list = [self._get_thought_text_from_action(item.get("thought")) for item in action_plan if isinstance(item, dict)]
-                        combined_thought = ". ".join(filter(None, thoughts_list))
-                    else:
-                        combined_thought = ""
+                    # Pass 'thought' to the tool if it expects it (as per its signature in tools.py)
+                    if 'thought' in inspect.signature(tool_function).parameters:
+                        tool_args_for_call['thought'] = tool_thought
 
+                    tool_result_str = str(tool_function(**tool_args_for_call))
+                    logger.info(f"Araç '{function_name}' sonucu (ham): {tool_result_str[:250]}...")
 
-        # Duygusal etkiyi combined_thought üzerinden işle (yukarıda zaten yapıldı veya güncellendi)
-        if combined_thought: # Check again as it might have been recalculated
-            emotional_impact = self.emotional_system.emotional_impact_assessment(combined_thought)
-            if emotional_impact:
-                self.emotional_system.update_state(
-                    self.memory_system,
-                    self.embodied_self,
-                    emotional_impact,
-                    self.current_turn,
-                    "agent_plan_emotion_after_ethical_review" # More specific source
-                )
+                    # Sanitize the tool result before using it as content or for emotional impact assessment
+                    sanitized_tool_result = self._sanitize_llm_output(tool_result_str)
+                    logger.info(f"Araç '{function_name}' sonucu (temizlenmiş): {sanitized_tool_result[:250]}...")
 
-        return action_plan
+                    emotional_impact = self.emotional_system.emotional_impact_assessment(sanitized_tool_result) # Use sanitized result for emotion
+                    if emotional_impact:
+                         self.emotional_system.update_state(self.memory_system, self.embodied_self, emotional_impact, self.current_turn, f"tool_result_emotion_{function_name}")
 
+                    final_thought = f"Araç çalıştırıldı: {function_name}. Argümanlar: {arguments_dict}. Sonuç (temizlenmiş): {sanitized_tool_result[:150]}..."
+                    final_content = f"'{function_name}' aracı çalıştırıldı. Sonuç: {sanitized_tool_result}" # Use sanitized result
+                    # In a multi-step scenario, this result would be sent back to the LLM.
+                    # For now, it becomes the observation for the next cycle.
+
+                except Exception as e:
+                    logger.error(f"Araç '{function_name}' yürütülürken hata: {e}", exc_info=True)
+                    error_message = f"'{function_name}' aracını kullanırken bir sorunla karşılaştım: {e}"
+                    final_thought = f"Araç '{function_name}' yürütülürken hata oluştu: {e}"
+                    final_content = self._sanitize_llm_output(error_message) # Sanitize error message for content
+                    self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 0.8, "anxiety": 0.5}, self.current_turn, f"tool_execution_error_{function_name}")
+            else:
+                logger.warning(f"LLM bilinmeyen bir araç istedi: {function_name}")
+                unknown_tool_message = f"'{function_name}' adında bir araç bulamadım."
+                final_thought = f"LLM bilinmeyen bir araç istedi: {function_name}"
+                final_content = self._sanitize_llm_output(unknown_tool_message) # Sanitize this message
+                self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 0.5}, self.current_turn, "unknown_tool_request")
+
+        elif isinstance(llm_output_or_error, list) and not llm_output_or_error: # Empty list of tool_calls
+            empty_list_message = "Bir araç kullanmam istendi ama detaylar belirsizdi."
+            final_thought = "LLM araç çağırmak istedi ama çağrı listesi boştu veya işlenemedi."
+            logger.warning(final_thought)
+            final_content = self._sanitize_llm_output(empty_list_message) # Sanitize this message
+            self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 0.3}, self.current_turn, "empty_tool_call_list")
+
+        else: # Truly unexpected output type from _ask_llm_with_tools
+            unexpected_type_message = "Aldığım yanıtı işleyemedim, farklı bir yaklaşım deniyorum."
+            logger.error(f"LLM'den beklenmeyen çıktı türü: {type(llm_output_or_error)}. Çıktı: {str(llm_output_or_error)[:200]}")
+            final_thought = "LLM'den beklenmedik bir formatte yanıt aldım."
+            final_content = self._sanitize_llm_output(unexpected_type_message) # Sanitize this message
+            self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 1.2}, self.current_turn, "unexpected_llm_output_type_error")
+
+        # Ensure final_content is always sanitized one last time before being put into the action
+        # This might be redundant if all paths above already sanitize, but acts as a safeguard.
+        final_content_for_action = self._sanitize_llm_output(final_content)
+
+        # The action_plan returned to the main loop is now always a single CONTINUE_INTERNAL_MONOLOGUE
+        # The 'content' is what Aybar effectively "observes" or "says" as a result of the turn.
+        # The 'thought' is the summary of internal reasoning for this turn.
+        action_to_return = [{"action": "CONTINUE_INTERNAL_MONOLOGUE", "thought": final_thought, "content": final_content_for_action}]
+
+        # Ethical review can be performed on the 'final_content_for_action' or 'final_thought' if needed,
+        # or on the parameters of a tool call before execution.
+        # For simplicity in this phase, ethical review on the *planned tool call* could be done
+        # before executing the tool if llm_output_or_error is a list.
+        # If it's a direct text response (final_content), it can be reviewed here.
+        # This part is simplified for now. A full ethical review needs careful placement.
+
+        return action_to_return
 
 
     # run_enhanced_cycle metodunun tamamını bu yeni "Beyin" versiyonuyla değiştirin
+    def run_enhanced_cycle(self, user_input: Optional[str] = None, user_id: Optional[str] = None, last_observation: Optional[str] = None) -> List[Dict]:
+        """
+        Bilişsel döngüyü çalıştırır ve bir sonraki adım için bir Eylem Planı (JSON listesi) oluşturur.
+        NOTE: This method is now effectively a wrapper around run_thought_cycle if called from main.
+        The main loop should ideally call run_thought_cycle directly.
+        """
+        logger.info("run_enhanced_cycle çağrıldı, bu metodun asıl işlevi run_thought_cycle'a taşındı.")
+
+        # Basic state updates that were in run_thought_cycle's preamble, if this method is still called.
+        # However, these are duplicated if run_thought_cycle is called below.
+        # self.current_turn += 1 # This would double increment if run_thought_cycle is also called.
+        # self.emotional_system.decay_emotions_and_update_loneliness(self.cognitive_system.social_relations, self.current_turn)
+        # self.cognitive_system.update_consciousness("turn")
+        # self.cognitive_system.update_focus_based_on_fatigue(self.emotional_system.emotional_state)
+
+        # if self._is_sleepy():
+        #     return self.sleep_cycle()
+        # if self._should_trigger_crisis():
+        #     crisis_response = self._handle_crisis()
+        #     return [{"action": "CONTINUE_INTERNAL_MONOLOGUE", "thought": crisis_response, "content": crisis_response}]
+
+        current_task, _ = self._generate_question(user_input, user_id) # Use current_task for current_task_for_llm
+
+        # Ensure last_observation is sensible if not provided
+        effective_observation = last_observation if last_observation is not None else "Yeni döngü başlıyor."
+
+        # Delegate to the new run_thought_cycle for the core logic
+        return self.run_thought_cycle(
+            current_task_for_llm=current_task,
+            observation=effective_observation,
+            user_id=user_id,
+            user_input=user_input,
+            predicted_user_emotion=None # predicted_user_emotion is not directly available here
+        )
+
+
+    # Yardımcı metodlar
     def run_enhanced_cycle(self, user_input: Optional[str] = None, user_id: Optional[str] = None, last_observation: Optional[str] = None) -> List[Dict]:
         """
         Bilişsel döngüyü çalıştırır ve bir sonraki adım için bir Eylem Planı (JSON listesi) oluşturur.
@@ -3051,6 +3184,7 @@ class EnhancedAybar:
         """
         dream_text = self.ask_llm(prompt, max_tokens=500, temperature=0.8)
         # Rüya içeriğini _sanitize_llm_output ile temizle
+        # Bu satır zaten görev tanımında istenen şekildeydi, sadece teyit ediyorum.
         sanitized_dream_text = self._sanitize_llm_output(dream_text)
 
         # Temizlenmiş metni belleğe kaydet ve döndür
@@ -3059,8 +3193,9 @@ class EnhancedAybar:
                 "timestamp": datetime.now().isoformat(),
                 "turn": self.current_turn,
                 "dream_content": sanitized_dream_text, # Temizlenmiş içeriği kaydet
-                "source": "generate_dream_content_sanitized"
+                "source": "generate_dream_content_sanitized" # Source güncellendi
             })
+        # Return ifadesi de doğru, temizlenmiş metni döndürüyor.
         return sanitized_dream_text if sanitized_dream_text else "Hiçbir rüya görülmedi veya rüya içeriği temizlendi."
 
 # Ana yürütme bloğunun tamamını bu nihai versiyonla değiştirin
@@ -3264,130 +3399,93 @@ if __name__ == "__main__":
 
             if not action_plan:
                 last_observation = "Hiçbir eylem planı oluşturmadım, düşünmeye devam ediyorum."
-                print("🤖 Aybar: ... (Sessizlik)")
-                time.sleep(1)
+                logger.info("🤖 Aybar: ... (Sessizlik)")
+                time.sleep(1) # Keep 1s sleep if no action plan
                 continue
 
             for action_item in action_plan:
                 action_type = action_item.get("action")
-                thought = action_item.get("thought", "N/A")
-                print(f"🧠 Düşünce: {thought}\n⚡ Eylem: {action_type}")
+                thought_text = aybar._get_thought_text_from_action(action_item.get("thought"))
+                logger.info(f"🧠 Düşünce: {thought_text}\n⚡ Eylem: {action_type}")
                 
-                response_content = ""
+                response_content = "" # Stores the outcome string of the action
                 
                 if action_type == "CONTINUE_INTERNAL_MONOLOGUE":
-                    response_content = action_item.get("content", thought)
-                    print(f"🤖 Aybar (İç Monolog): {response_content}")
-                    last_observation = f"Şunu düşündüm: {response_content[:100]}..."
+                    response_content = action_item.get("content", thought_text)
+                    logger.info(f"🤖 Aybar (İç Monolog): {response_content}")
+                    # last_observation is not directly set by this, it's an internal monologue
                 
                 elif action_type == "ASK_USER":
-                    prompt_text = action_item.get("question", "Seni dinliyorum...")
-                    try:
-                        with open("from_aybar.txt", "w", encoding="utf-8") as f:
-                            f.write(prompt_text)
-                        response_content = f"Mesaj Telegram'a gönderilmek üzere '{prompt_text[:50]}...' from_aybar.txt dosyasına yazıldı."
-                        last_observation = response_content
-                        print(f"📤 Aybar'dan Telegram'a Mesaj: {prompt_text}")
-                    except Exception as e:
-                        response_content = f"from_aybar.txt dosyasına yazılırken hata oluştu: {e}"
-                        last_observation = response_content
-                        print(f"⚠️ {response_content}")
-                    # user_input burada None kalmalı, bir sonraki turda to_aybar.txt'den okunacak.
+                    question_to_ask = action_item.get("question", "Seni dinliyorum...")
+                    response_content = tools.ask_user_via_file(question=question_to_ask, aybar_instance=aybar, thought=thought_text)
+                    # The tool returns a confirmation string, which is good for response_content
+                    logger.info(f"📤 {response_content}") # Log tool's confirmation
                 
                 elif action_type == "SUMMARIZE_AND_RESET":
-                    response_content = "Bir an... Düşüncelerimi toparlıyorum ve yeniden odaklanıyorum."
-                    print(f"🔄 {response_content}")
-                    active_goal = None # Hedefi sıfırlayarak yeni bir hedef üretmesini tetikle
-                    last_observation = "Bir düşünce döngüsüne girdiğimi fark ettim. Durumu özetleyip yeniden başlamam gerekiyor."
+                    response_content = tools.summarize_and_reset(aybar_instance=aybar, thought=thought_text)
+                    logger.info(f"🔄 {response_content}")
+                    active_goal = None # Reset active_goal for the main loop
 
                 elif action_type == "Maps_OR_SEARCH":
                     query = action_item.get("query", "").strip()
-                    if not query: # Sorgu boşsa veya sadece boşluk içeriyorsa
-                        last_observation = "Maps_OR_SEARCH eylemi için bir URL veya arama terimi belirtilmedi."
-                        response_content = "Ne aramam gerektiğini veya hangi adrese gitmem gerektiğini belirtmedin."
-                        plan_executed_successfully = False
-                    # self.web_surfer_system.driver None ise veya başlatılmamışsa
-                    elif not hasattr(aybar, 'web_surfer_system') or not aybar.web_surfer_system.driver:
-                        last_observation = "Web sörfçüsü (Selenium) aktif değil. Maps_OR_SEARCH eylemi gerçekleştirilemiyor."
-                        response_content = "Web tarayıcım şu anda çalışmıyor, bu yüzden bu eylemi yapamam."
+                    if not query:
+                        response_content = "Maps_OR_SEARCH eylemi için bir URL veya arama terimi belirtilmedi."
+                        logger.warning(response_content)
                         plan_executed_successfully = False
                     else:
-                        is_url = query.lower().startswith("http://") or query.lower().startswith("https://") or query.lower().startswith("www.")
-                        
-                        if is_url:
-                            print(f"🧭 Belirtilen URL'e gidiliyor: '{query}'")
-                            aybar.web_surfer_system.navigate_to(query)
-                            time.sleep(3) # Sayfanın yüklenmesi için bekle
-                            page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
-                            response_content = f"'{query}' adresine gittim."
-                            last_observation = f"'{query}' adresine gidildi. Sayfa içeriği: {page_text[:200]}... Etkileşimli elementler: {elements[:2]}"
-
-                            # CAPTCHA Tespiti
-                            captcha_keywords = ["recaptcha", "i'm not a robot", "robot değilim", "sıra dışı bir trafik", "bilgisayar ağınızdan", "güvenlik kontrolü", "are you human", "algıladık", "trafik"]
-                            page_text_lower = page_text.lower()
-                            captcha_found = any(keyword in page_text_lower for keyword in captcha_keywords)
-
-                            if captcha_found and hasattr(aybar, 'web_surfer_system') and aybar.web_surfer_system.driver:
+                        response_content = tools.maps_or_search(query=query, aybar_instance=aybar, thought=thought_text)
+                        # CAPTCHA detection logic
+                        captcha_keywords = ["recaptcha", "i'm not a robot", "robot değilim", "sıra dışı bir trafik", "bilgisayar ağınızdan", "güvenlik kontrolü", "are you human", "algıladık", "trafik"]
+                        if isinstance(response_content, str) and (any(keyword in response_content.lower() for keyword in captcha_keywords) or "CAPTCHA" in response_content.upper()):
+                            if hasattr(aybar, 'web_surfer_system') and aybar.web_surfer_system.driver:
                                 aybar.is_waiting_for_human_captcha_help = True
                                 aybar.last_web_url_before_captcha = aybar.web_surfer_system.driver.current_url
-                                last_observation = "Bir robot doğrulaması (CAPTCHA) ile karşılaştım. İnsan yardımı bekleniyor."
-                                response_content = last_observation # response_content'i de güncelleyelim ki LLM bilsin
+                                captcha_message = "Bir robot doğrulaması (CAPTCHA) ile karşılaştım. İnsan yardımı bekleniyor."
+                                response_content = captcha_message # Update response_content to reflect CAPTCHA
                                 aybar.speaker_system.speak("Bir robot doğrulamasıyla karşılaştım. Lütfen bu adımı benim için geçip hazır olduğunda 'devam et' veya sadece 'devam' yazar mısın?")
-                                print(f"🤖 CAPTCHA tespit edildi. URL: {aybar.last_web_url_before_captcha}. İnsan yardımı bekleniyor...")
-                                # Mevcut eylem planını daha fazla işleme, bir sonraki turda insan girdisi beklenecek.
-                                # Bu blok Maps_OR_SEARCH içinde olduğu için, bu eylemin geri kalanını atlamak ve
-                                # main loop'un bir sonraki iterasyonuna geçmek için plan_executed_successfully = False ve break/continue kullanılabilir.
-                                # Ancak, bu değişiklik doğrudan main loop'un for action_item in action_plan: döngüsünde değil,
-                                # o döngünün içindeki bir eylem tipinin (Maps_OR_SEARCH) işlenmesinde.
-                                # Bu nedenle, bu eylemin geri kalanını pas geçmek için plan_executed_successfully=False yeterli olacaktır.
-                                plan_executed_successfully = False # Bu, main loop'ta time.sleep(0.5) tetikler ve sonraki tura geçer.
-                        else:
-                            # _perform_internet_search zaten DDGS kullanıyor ve sonucu özetliyor.
-                            print(f"🌐 İnternette araştırılıyor: '{query}'")
-                            search_summary = aybar._perform_internet_search(query) # Bu metot zaten last_observation'ı ve belleği güncelliyor.
-                            response_content = f"'{query}' için internette bir arama yaptım ve şu bilgileri buldum: {search_summary}"
-                            # _perform_internet_search sonucu zaten bir gözlem oluşturduğu için last_observation'ı burada tekrar set etmeye gerek yok,
-                            # ancak response_content'i LLM'in bir sonraki turda kullanması için ayarlayabiliriz.
-                            last_observation = f"'{query}' için arama yapıldı. Özet: {search_summary[:200]}..."
+                                logger.warning(f"🤖 CAPTCHA tespit edildi. URL: {aybar.last_web_url_before_captcha}. İnsan yardımı bekleniyor...")
+                                plan_executed_successfully = False
                 
-                elif action_type in ["WEB_CLICK", "WEB_TYPE"]:
-                    if aybar.web_surfer_system.driver:
-                        web_action_result = aybar.web_surfer_system.perform_web_action(action_item)
-                        page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
-                        last_observation = f"{web_action_result}. Sayfanın yeni durumu: {page_text[:300]}... Etkileşimli elementler: {elements[:3]}"
-                        response_content = "Web sayfasında bir eylem gerçekleştirdim."
+                elif action_type == "WEB_CLICK":
+                    target_xpath = action_item.get("target_xpath")
+                    if not target_xpath:
+                        response_content = "WEB_CLICK için target_xpath belirtilmedi."
+                        plan_executed_successfully = False
                     else:
-                        last_observation = "Web sörfçüsü aktif değil, web eylemi başarısız."
+                        response_content = tools.web_click(target_xpath=target_xpath, aybar_instance=aybar, thought=thought_text)
+                        if "Hata:" in response_content or "Error:" in response_content or "not available" in response_content:
+                            plan_executed_successfully = False
+                        else: # Add current page state to observation on success
+                            if hasattr(aybar, 'web_surfer_system') and aybar.web_surfer_system.driver:
+                                page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
+                                response_content += f". Sayfanın yeni durumu: {page_text[:200]}... Etkileşimli elementler: {elements[:2]}"
+
+
+                elif action_type == "WEB_TYPE":
+                    target_xpath = action_item.get("target_xpath")
+                    text_to_type = action_item.get("text")
+                    if not target_xpath or text_to_type is None: # text_to_type can be empty string
+                        response_content = "WEB_TYPE için target_xpath veya text belirtilmedi."
+                        plan_executed_successfully = False
+                    else:
+                        response_content = tools.web_type(target_xpath=target_xpath, text_to_type=text_to_type, aybar_instance=aybar, thought=thought_text)
+                        if "Hata:" in response_content or "Error:" in response_content or "not available" in response_content:
+                            plan_executed_successfully = False
+                        else: # Add current page state to observation on success
+                             if hasattr(aybar, 'web_surfer_system') and aybar.web_surfer_system.driver:
+                                page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
+                                response_content += f". Sayfanın yeni durumu: {page_text[:200]}... Etkileşimli elementler: {elements[:2]}"
 
                 elif action_type == "FINISH_GOAL":
                     summary = action_item.get('summary', 'Görev tamamlandı.')
-                    response_content = f"'{aybar.cognitive_system.get_current_task(aybar.current_turn) or 'Mevcut görev'}' tamamlandı. Özet: {summary}"
+                    response_content = tools.finish_goal(summary=summary, aybar_instance=aybar, thought=thought_text)
+                    if not aybar.cognitive_system.main_goal:
+                        active_goal = None
+                    logger.info(f"🏁 {response_content}")
 
-                    if aybar.cognitive_system.sub_goals and 0 <= aybar.cognitive_system.current_sub_goal_index < len(aybar.cognitive_system.sub_goals):
-                        print(f"🏁 Alt Hedef Tamamlandı: {aybar.cognitive_system.sub_goals[aybar.cognitive_system.current_sub_goal_index]}")
-                        aybar.cognitive_system.current_sub_goal_index += 1
-
-                        if 0 <= aybar.cognitive_system.current_sub_goal_index < len(aybar.cognitive_system.sub_goals):
-                            next_sub_goal = aybar.cognitive_system.sub_goals[aybar.cognitive_system.current_sub_goal_index]
-                            last_observation = f"Önceki alt hedef ('{summary}') tamamlandı. Şimdi sıradaki alt hedefe geçiyorum: '{next_sub_goal}'."
-                            response_content += f" Sırada: {next_sub_goal}."
-                        else: # Tüm alt hedefler bitti
-                            last_observation = f"Tüm alt hedefler tamamlandı. Ana hedef ('{aybar.cognitive_system.main_goal}') başarıyla sonuçlandı."
-                            response_content += f" Ana hedef '{aybar.cognitive_system.main_goal}' tamamlandı."
-                            aybar.cognitive_system.clear_all_goals()
-                            active_goal = None # Ana döngü yeni bir otonom hedef üretecek
-                    else: # Alt hedef yoktu, ana hedef tamamlandı
-                        last_observation = f"Ana hedef ('{aybar.cognitive_system.main_goal}') tamamlandı: {summary}."
-                        response_content += f" Ana hedef '{aybar.cognitive_system.main_goal}' tamamlandı."
-                        aybar.cognitive_system.clear_all_goals()
-                        active_goal = None # Ana döngü yeni bir otonom hedef üretecek
-
-                    print(f"🏁 {response_content}")
-
-
-                # DÜZELTİLDİ: Tüm eski araçları işleyen nihai blok
                 elif action_type == "USE_LEGACY_TOOL":
                     command = action_item.get("command", "")
+                    legacy_tool_thought = thought_text
                     
                     match = re.search(r"\[(\w+)(?::\s*(.*?))?\]", command.strip())
                     
@@ -3397,74 +3495,91 @@ if __name__ == "__main__":
                         tool_name, param_str = match.groups()
                         param_str = param_str.strip() if param_str else ""
                         
-                        print(f"🛠️  Araç Kullanımı: {tool_name}, Parametre: {param_str or 'Yok'}")
+                        logger.info(f"🛠️  USE_LEGACY_TOOL Kullanımı: {tool_name}, Parametre: {param_str or 'Yok'}, Düşünce: {legacy_tool_thought}")
 
                         try:
-                            # Parametre almayan basit araçlar
                             if tool_name == "EVOLVE":
                                 aybar.evolution_system.trigger_self_evolution(problem=param_str or None)
                                 response_content = "Deneysel bir evrim döngüsü başlatıyorum..."
-                            elif tool_name == "REFLECT":
+                            elif tool_name == "REFLECT": # Stays as internal Aybar method
                                 response_content = aybar.cognitive_system._execute_reflection(aybar, last_observation)
                             elif tool_name == "UPDATE_IDENTITY":
-                                response_content = aybar._update_identity()
-
-                            # Metin parametresi alan araçlar
-                            elif tool_name == "SEARCH":
-                                response_content = aybar._perform_internet_search(param_str) if param_str else "Arama için bir konu belirtilmedi."
+                                response_content = tools.update_identity(aybar_instance=aybar, thought=legacy_tool_thought)
                             elif tool_name == "KEYBOARD_TYPE":
-                                response_content = aybar.computer_control_system.keyboard_type(param_str) if param_str else "Yazmak için bir metin belirtilmedi."
+                                response_content = tools.keyboard_type(text_to_type=param_str, aybar_instance=aybar, thought=legacy_tool_thought)
                             
-                            # JSON parametresi alan araçlar
-                            elif tool_name in ["ANALYZE_MEMORY", "RUN_SIMULATION", "SET_GOAL", "CREATE", "REGULATE_EMOTION", "INTERACT", "META_REFLECT", "MOUSE_CLICK"]:
-                                params = json.loads(param_str)
+                            elif tool_name in ["ANALYZE_MEMORY", "RUN_SIMULATION", "SET_GOAL", "CREATE", "REGULATE_EMOTION", "INTERACT", "META_REFLECT", "MOUSE_CLICK", "SEE_SCREEN"]:
+                                params = {}
+                                if param_str:
+                                    try:
+                                        params = json.loads(param_str)
+                                    except json.JSONDecodeError:
+                                        response_content = f"'{tool_name}' için sağlanan JSON parametresi '{param_str}' geçersiz."
+                                        logger.error(response_content)
+                                        plan_executed_successfully = False
+                                        break # Stop processing this invalid legacy tool command
+
                                 if tool_name == "ANALYZE_MEMORY":
-                                    response_content = aybar._analyze_memory(params.get("query"))
+                                    response_content = tools.analyze_memory(query=params.get("query", ""), aybar_instance=aybar, thought=legacy_tool_thought)
                                 elif tool_name == "RUN_SIMULATION":
-                                    response_content = aybar._run_internal_simulation(params.get("scenario"))
+                                    response_content = tools.run_internal_simulation(scenario=params.get("scenario", ""), aybar_instance=aybar, thought=legacy_tool_thought)
                                 elif tool_name == "SET_GOAL":
-                                    goal_input_param = params.get("goal_input", params.get("goal")) # Eski "goal" anahtarını da destekle
-                                    duration_param = params.get("duration_turns", params.get("duration", 20)) # Eski "duration"
+                                    goal_input_param = params.get("goal_input", params.get("goal"))
+                                    duration_param = params.get("duration_turns", params.get("duration", 20))
                                     if goal_input_param:
                                         aybar.cognitive_system.set_new_goal(goal_input_param, duration_param, aybar.current_turn)
                                         response_content = f"Yeni hedef(ler) ayarlandı: {goal_input_param}"
-                                        active_goal = aybar.cognitive_system.get_current_task(aybar.current_turn) # Update active_goal for the main loop
+                                        active_goal = aybar.cognitive_system.get_current_task(aybar.current_turn)
                                     else:
                                         response_content = "SET_GOAL için 'goal_input' parametresi eksik."
                                 elif tool_name == "CREATE":
-                                    response_content = aybar._creative_generation(params.get("type", "text"), params.get("theme", "o anki hislerim"))
+                                    creation_type_param = params.get("type", "hikaye")
+                                    theme_param = params.get("theme", "o anki hislerim")
+                                    response_content = tools.creative_generation(creation_type=creation_type_param, theme=theme_param, aybar_instance=aybar, thought=legacy_tool_thought)
                                 elif tool_name == "REGULATE_EMOTION":
-                                    response_content = aybar._regulate_emotion(params.get("strategy", "calm_monologue"))
+                                    strategy_param = params.get("strategy", "calm_monologue")
+                                    response_content = tools.regulate_emotion(strategy=strategy_param, aybar_instance=aybar, thought=legacy_tool_thought)
                                 elif tool_name == "INTERACT":
-                                    response_content = aybar._handle_interaction(active_user_id, params.get("goal", "increase_familiarity"), params.get("method", "ask_general_question"))
+                                    response_content = tools.handle_interaction(user_id=active_user_id, goal=params.get("goal", "increase_familiarity"), method=params.get("method", "ask_general_question"), aybar_instance=aybar, thought=legacy_tool_thought)
                                 elif tool_name == "META_REFLECT":
-                                     response_content = aybar._perform_meta_reflection(params.get("turn_to_analyze"), params.get("thought_to_analyze"))
+                                     response_content = tools.perform_meta_reflection(turn_to_analyze=params.get("turn_to_analyze", aybar.current_turn -1), thought_to_analyze=params.get("thought_to_analyze", last_observation), aybar_instance=aybar, thought=legacy_tool_thought)
                                 elif tool_name == "MOUSE_CLICK":
-                                     response_content = aybar.computer_control_system.mouse_click(params.get("x"), params.get("y"), params.get("double", False))
+                                     response_content = tools.mouse_click(x=params.get("x"), y=params.get("y"), double_click=params.get("double", False), aybar_instance=aybar, thought=legacy_tool_thought)
+                                elif tool_name == "SEE_SCREEN":
+                                    question_for_vlm = params.get("question", "Ekranı genel olarak analiz et.")
+                                    response_content = tools.analyze_screen(question=question_for_vlm, aybar_instance=aybar, thought=legacy_tool_thought)
                             else:
                                 response_content = f"Bilinmeyen eski araç: {tool_name}"
-                        except (json.JSONDecodeError, TypeError):
-                            response_content = f"'{tool_name}' komutunun JSON parametreleri hatalı veya eksik."
-                        except Exception as e:
-                            response_content = f"'{tool_name}' aracı çalıştırılırken bir hata oluştu: {e}"
+                        except (json.JSONDecodeError, TypeError) as e_json_legacy:
+                            response_content = f"'{tool_name}' komutunun JSON parametreleri hatalı veya eksik: {e_json_legacy}. Parametre string: '{param_str}'"
+                            logger.error(response_content)
+                            plan_executed_successfully = False
+                        except Exception as e_legacy:
+                            response_content = f"'{tool_name}' aracı çalıştırılırken bir hata oluştu: {e_legacy}"
+                            logger.error(response_content, exc_info=True)
+                            plan_executed_successfully = False
                     
                     last_observation = f"'{command}' aracını kullandım. Sonuç: {response_content[:100]}..."
-
                 
-
-                # DEĞİŞTİRİLDİ: Bilinmeyen eylem için daha aktif hata yönetimi
-                else:
+                else: # Bilinmeyen eylem türü
                     response_content = f"Bilinmeyen bir eylem türü ({action_type}) denedim. Bu eylem planını iptal ediyorum."
-                    last_observation = response_content # YENİ: Hatayı bir sonraki tur için gözlem yap
-                    print(f"🤖 Aybar (Planlama Hatası): {response_content}")
-                    plan_executed_successfully = False # YENİ: Planın başarısız olduğunu işaretle
-                    break # YENİ: Hatalı planın geri kalanını çalıştırmayı durdur ve döngüden çık.
+                    logger.warning(f"🤖 Aybar (Planlama Hatası): {response_content}")
+                    plan_executed_successfully = False
+                    # last_observation will be set outside the loop based on the final response_content from the error
+                    break
 
-                if response_content and action_type not in ["CONTINUE_INTERNAL_MONOLOGUE"]:
-                    print(f"🤖 Aybar (Eylem Sonucu): {response_content}")
+                if response_content and action_type not in ["CONTINUE_INTERNAL_MONOLOGUE"]: # Log results of actions that produce external effect or info
+                    logger.info(f"🤖 Aybar (Eylem Sonucu): {response_content[:200]}...")
 
-            # DEĞİŞTİRİLDİ: Esnek bekleme süresi
-            time.sleep(0.5 if not plan_executed_successfully else 2)
+            if not plan_executed_successfully: # If any action failed, the loop breaks, use its response_content for observation
+                last_observation = response_content if response_content else "Bir eylem gerçekleştirilirken plan_executed_successfully False olarak ayarlandı, ancak response_content boştu."
+            elif not response_content and action_type == "CONTINUE_INTERNAL_MONOLOGUE": # If it was just a thought, observation doesn't change much
+                pass # last_observation remains "Eylem tamamlandı. Yeni durum değerlendiriliyor." or similar from before the loop
+            elif response_content: # For successful actions that generated response_content
+                last_observation = response_content[:300] + "..." if len(response_content) > 300 else response_content
+            # If response_content is empty and it wasn't a CONTINUE_INTERNAL_MONOLOGUE, last_observation retains its value from before the loop
+
+            time.sleep(0.5 if not plan_executed_successfully else 1)
 
     except KeyboardInterrupt:
         print("\n🚫 Simülasyon kullanıcı tarafından durduruldu.")
