@@ -2793,6 +2793,30 @@ class EnhancedAybar:
         # DEĞİŞTİRİLDİ: Artık ayrıştırma işini yeni ve akıllı metodumuz yapıyor.
         # action_plan is already defined above from self._parse_llm_json_plan(response_text)
 
+        # --- Action Plan Validation ---
+        if not isinstance(action_plan, list) or not action_plan: # Check if it's a non-empty list
+            fallback_thought = f"(LLM'den gelen eylem planı bir liste değil veya boş. Alınan: {str(action_plan)[:200]})"
+            logger.warning(fallback_thought)
+            # Assuming current_task_for_llm, observation, user_id are defined earlier in run_thought_cycle
+            self._save_experience("invalid_action_plan_type", current_task_for_llm or "Hedefsiz", str(action_plan), observation, user_id or "Bilinmeyen")
+            return [{
+                "action": "CONTINUE_INTERNAL_MONOLOGUE",
+                "thought": fallback_thought,
+                "content": "Eylem planı oluşturulurken beklenmedik bir formatla karşılaşıldı. Durumu yeniden değerlendiriyorum."
+            }]
+
+        # Check if the first item in the list is a dictionary
+        if not isinstance(action_plan[0], dict):
+            fallback_thought = f"(LLM'den gelen eylem planının ilk elemanı bir sözlük değil. Alınan ilk eleman: {str(action_plan[0])[:200]})"
+            logger.warning(fallback_thought)
+            self._save_experience("invalid_action_plan_item_type", current_task_for_llm or "Hedefsiz", str(action_plan), observation, user_id or "Bilinmeyen")
+            return [{
+                "action": "CONTINUE_INTERNAL_MONOLOGUE",
+                "thought": fallback_thought,
+                "content": "Eylem planındaki ilk adım anlaşılamadı. Durumu yeniden değerlendiriyorum."
+            }]
+        # --- End of Action Plan Validation ---
+
         # Etik Çerçeve Danışmanlığı
         if action_plan: # Sadece geçerli bir plan varsa etik danışma yap
             ethical_concern = self.ethical_framework.consult(action_plan)
