@@ -38,6 +38,7 @@ def maps_or_search(query: str, aybar_instance: EnhancedAybarType, thought: Optio
 
     Returns:
         A string describing the result of the action.
+    @category: web_interaction
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'maps_or_search' called. Query: '{query}', Thought: '{thought}'")
@@ -79,6 +80,7 @@ def ask_user_via_file(question: str, aybar_instance: EnhancedAybarType, thought:
 
     Returns:
         A string confirming the action.
+    @category: core_utils
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'ask_user_via_file' called. Question: '{question[:50]}...', Thought: '{thought}'")
@@ -101,6 +103,7 @@ def update_identity(aybar_instance: EnhancedAybarType, thought: Optional[str] = 
 
     Returns:
         A string indicating the result of the identity update attempt.
+    @category: cognitive_emotional
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'update_identity' called. Thought: '{thought}'")
@@ -125,6 +128,7 @@ def finish_goal(summary: str, aybar_instance: EnhancedAybarType, thought: Option
 
     Returns:
         A string confirming goal completion.
+    @category: core_utils
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'finish_goal' called. Summary: '{summary}', Thought: '{thought}'")
@@ -173,6 +177,7 @@ def summarize_and_reset(aybar_instance: EnhancedAybarType, thought: Optional[str
 
     Returns:
         A string confirming the reset.
+    @category: core_utils
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'summarize_and_reset' called. Thought: '{thought}'")
@@ -199,6 +204,7 @@ def creative_generation(creation_type: str, theme: str, aybar_instance: Enhanced
 
     Returns:
         A string containing the generated creative content or an error/status message.
+    @category: cognitive_emotional
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'creative_generation' called. Type: '{creation_type}', Theme: '{theme}', Thought: '{thought}'")
@@ -224,6 +230,7 @@ def regulate_emotion(strategy: str, aybar_instance: EnhancedAybarType, thought: 
 
     Returns:
         A string indicating the result of the emotion regulation attempt.
+    @category: cognitive_emotional
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'regulate_emotion' called. Strategy: '{strategy}', Thought: '{thought}'")
@@ -249,6 +256,7 @@ def analyze_memory(query: str, aybar_instance: EnhancedAybarType, thought: Optio
 
     Returns:
         A string containing the insight or result from memory analysis.
+    @category: cognitive_emotional
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'analyze_memory' called. Query: '{query}', Thought: '{thought}'")
@@ -274,6 +282,7 @@ def run_internal_simulation(scenario: str, aybar_instance: EnhancedAybarType, th
 
     Returns:
         A string containing the result or output of the internal simulation.
+    @category: cognitive_emotional
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'run_internal_simulation' called. Scenario: '{scenario[:50]}...', Thought: '{thought}'")
@@ -301,6 +310,7 @@ def handle_interaction(user_id: str, goal: str, method: str, aybar_instance: Enh
 
     Returns:
         A string representing Aybar's response or question in the interaction.
+    @category: social_interaction
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'handle_interaction' called. User ID: {user_id}, Goal: {goal}, Method: {method}, Thought: {thought}")
@@ -327,6 +337,7 @@ def perform_meta_reflection(turn_to_analyze: int, thought_to_analyze: str, aybar
 
     Returns:
         A string containing the analysis or insights from the meta-reflection.
+    @category: cognitive_emotional
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'perform_meta_reflection' called for turn {turn_to_analyze}. Thought: '{thought}'")
@@ -355,6 +366,7 @@ def keyboard_type(text_to_type: str, aybar_instance: EnhancedAybarType, thought:
 
     Returns:
         A string confirming the action or an error message.
+    @category: system_interaction
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'keyboard_type' called. Text: '{text_to_type[:30]}...', Thought: '{thought}'")
@@ -382,6 +394,7 @@ def mouse_click(aybar_instance: EnhancedAybarType, x: int, y: int, double_click:
 
     Returns:
         A string confirming the action or an error message.
+    @category: system_interaction
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'mouse_click' called. Coordinates: ({x},{y}), DoubleClick: {double_click}, Thought: '{thought}'")
@@ -407,6 +420,7 @@ def analyze_screen(question: str, aybar_instance: EnhancedAybarType, thought: Op
 
     Returns:
         A string containing the VLM's answer or an error message.
+    @category: system_interaction
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'analyze_screen' called. Question: '{question}', Thought: '{thought}'")
@@ -435,6 +449,7 @@ def web_click(target_xpath: str, aybar_instance: EnhancedAybarType, thought: Opt
 
     Returns:
         A string describing the result of the click action.
+    @category: web_interaction
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'web_click' called. XPath: '{target_xpath}', Thought: '{thought}'")
@@ -463,6 +478,7 @@ def web_type(target_xpath: str, text_to_type: str, aybar_instance: EnhancedAybar
 
     Returns:
         A string describing the result of the type action.
+    @category: web_interaction
     """
     tool_logger = _get_tool_logger(aybar_instance)
     tool_logger.info(f"Tool 'web_type' called. XPath: '{target_xpath}', Text: '{text_to_type[:30]}...', Thought: '{thought}'")

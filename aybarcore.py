@@ -1698,9 +1698,33 @@ class EnhancedAybar:
         self._check_for_guardian_logs()
         self.identity_prompt = self._load_identity()
         self.tool_definitions_for_llm = self._prepare_tool_definitions() # Initialize tool definitions
+        self.tool_categories = self._parse_tool_categories() # Parse and store tool categories
         logger.info(f"🛠️ Prepared {len(self.tool_definitions_for_llm)} tool definitions for the LLM.")
+        logger.info(f"🔩 Parsed {len(self.tool_categories)} tool categories.")
         print(f"🧬 Aybar Kimliği Yüklendi: {self.identity_prompt[:70]}...")
         print("🚀 Geliştirilmiş Aybar Başlatıldı")
+
+    def _parse_tool_categories(self) -> Dict[str, str]:
+        """
+        Parses tool categories from the docstrings of functions in the 'tools' module.
+        Categories are expected to be in the format '@category: <category_name>' in the docstring.
+        """
+        categories = {}
+        for func_name in dir(tools):
+            if func_name.startswith("_"): # Skip private/special methods
+                continue
+            func = getattr(tools, func_name)
+            if callable(func):
+                docstring = inspect.getdoc(func)
+                if docstring:
+                    match = re.search(r"@category:\s*(\w+)", docstring)
+                    if match:
+                        categories[func_name] = match.group(1).strip()
+                    else:
+                        # Assign a default category if not specified, or log a warning
+                        categories[func_name] = "general" # Default category
+                        logger.debug(f"Tool '{func_name}' has no @category tag in docstring, assigned to 'general'.")
+        return categories
 
     def _prepare_tool_definitions(self) -> List[Dict[str, Any]]:
         """
@@ -1789,6 +1813,58 @@ class EnhancedAybar:
 
         logger.debug(f"Generated tool definitions for LLM: {json.dumps(tool_defs, indent=2)}")
         return tool_defs
+
+    def _select_relevant_tools(self, goal: str) -> List[Dict[str, Any]]:
+        """
+        Selects tools relevant to the current goal based on keywords and categories.
+        """
+        if not goal or not isinstance(goal, str):
+            logger.warning("No valid goal provided for tool selection, returning all tools.")
+            return self.tool_definitions_for_llm
+
+        relevant_tool_names = set()
+        goal_lower = goal.lower()
+
+        # Always include core_utils
+        for tool_name, category in self.tool_categories.items():
+            if category == "core_utils":
+                relevant_tool_names.add(tool_name)
+
+        # Keyword-based selection for other categories
+        keyword_to_category_map = {
+            "web_interaction": ["web", "araştır", "site", "url", "tıkla", "gezinti", "sayfa"],
+            "system_interaction": ["ekran", "klavye", "fare", "kontrol", "sistem", "uygulama"],
+            "cognitive_emotional": ["hafıza", "hatırla", "düşün", "öğren", "kimlik", "hisset", "analiz et", "simüle et", "yarat"],
+            "social_interaction": ["konuş", "sor", "iletişim", "insan", "kullanıcı"],
+            # Add more mappings as needed, e.g., for file_system
+        }
+
+        for category, keywords in keyword_to_category_map.items():
+            if any(keyword in goal_lower for keyword in keywords):
+                for tool_name, cat in self.tool_categories.items():
+                    if cat == category:
+                        relevant_tool_names.add(tool_name)
+
+        # Filter the full tool definitions list
+        selected_tools = [
+            tool_def for tool_def in self.tool_definitions_for_llm
+            if tool_def.get("function", {}).get("name") in relevant_tool_names
+        ]
+
+        if not selected_tools: # Fallback if no tools are selected (e.g., goal is very abstract)
+            logger.warning(f"No specific tools selected for goal '{goal_lower}'. Falling back to core_utils or all if empty.")
+            # Return at least core_utils if they were missed, or all if even that's empty
+            if not any(tool_def.get("function", {}).get("name") in relevant_tool_names for tool_def in self.tool_definitions_for_llm if self.tool_categories.get(tool_def.get("function", {}).get("name")) == "core_utils"):
+                 core_tools_defs = [td for td in self.tool_definitions_for_llm if self.tool_categories.get(td.get("function", {}).get("name")) == "core_utils"]
+                 if core_tools_defs:
+                     selected_tools = core_tools_defs
+                     logger.info(f"Selected only core_utils tools as fallback for goal: '{goal_lower}'. Count: {len(selected_tools)}")
+                 else: # Should not happen if core_utils are defined
+                     logger.error("No core_utils tools defined for fallback. This is a configuration issue.")
+                     return self.tool_definitions_for_llm # Last resort: return all
+
+        logger.info(f"Selected {len(selected_tools)} relevant tools for goal '{goal_lower}': {[t['function']['name'] for t in selected_tools]}")
+        return selected_tools if selected_tools else self.tool_definitions_for_llm # Ensure we don't return empty list if all logic fails
 
     def _find_json_blob(self, text: str) -> Optional[str]:
         """
@@ -2864,8 +2940,11 @@ class EnhancedAybar:
         
         prompt = self._build_agent_prompt(current_task_for_llm, observation, user_id, user_input, predicted_user_emotion)
 
+        # Select relevant tools for the current task
+        relevant_tools = self._select_relevant_tools(current_task_for_llm)
+
         # Call LLM with tool definitions
-        llm_output_or_error = self._ask_llm_with_tools(prompt, tools_definitions=self.tool_definitions_for_llm)
+        llm_output_or_error = self._ask_llm_with_tools(prompt, tools_definitions=relevant_tools)
 
         # Save raw LLM output (text or tool call structure, or error string)
         raw_response_to_save = llm_output_or_error
@@ -2879,6 +2958,32 @@ class EnhancedAybar:
         final_thought = "LLM ile etkileşim ve araç değerlendirmesi tamamlandı."
         final_content = "Gözlemliyorum ve bir sonraki adımı düşünüyorum." # Default content
 
+        # Kaotik cevap kontrolü
+        is_chaotic_response = False
+        if isinstance(llm_output_or_error, str) and not llm_output_or_error.startswith("⚠️ LLM"):
+            # Eğer _ask_llm_with_tools'dan dönen bir hata değilse ve string ise kaotiklik kontrolü yap
+            chaotic_indicators = ['[', '{', 'def', 'import'] # Basit göstergeler
+            if any(indicator in llm_output_or_error for indicator in chaotic_indicators):
+                # Daha detaylı kontrol: Eğer metin JSON'a benzemiyorsa veya çok fazla kod içeriyorsa
+                try:
+                    # JSON'a benzeyip benzemediğini test et (çok basit bir test)
+                    if not (llm_output_or_error.strip().startswith('{') and llm_output_or_error.strip().endswith('}')) and \
+                       not (llm_output_or_error.strip().startswith('[') and llm_output_or_error.strip().endswith(']')):
+                        # Basitçe geçerli bir JSON değilse ve göstergeleri içeriyorsa kaotik say
+                        is_chaotic_response = True
+                except Exception: # Herhangi bir string işleme hatasında kaotik sayılabilir
+                    is_chaotic_response = True
+
+                if is_chaotic_response:
+                    logger.warning(f"🚨 Kaotik LLM çıktısı tespit edildi: {llm_output_or_error[:200]}...")
+                    self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 2.0, "anxiety": 1.0, "mental_fatigue": 0.5}, self.current_turn, "chaotic_llm_response")
+                    return [
+                        {
+                            "action": "summarize_and_reset",
+                            "thought": "Beynimden (LLM) anlamsız ve kaotik bir cevap geldi. Düşünce zincirim bozuldu. Kendimi sıfırlayıp, daha basit bir hedefle yeniden başlamalıyım."
+                        }
+                    ]
+
         if isinstance(llm_output_or_error, str): # Direct text response from LLM or error string from _ask_llm_with_tools
             if llm_output_or_error.startswith("⚠️ LLM"):
                 logger.error(f"LLM çağrısı başarısız: {llm_output_or_error}")
@@ -2886,15 +2991,14 @@ class EnhancedAybar:
                 final_thought = llm_output_or_error
                 # Sanitize even error messages if they become content
                 final_content = self._sanitize_llm_output("Bir iletişim hatası veya LLM sistem hatası oluştu. Bu durumu not alıyorum ve düşünmeye devam edeceğim.")
-            else:
-                logger.info("LLM'den doğrudan metin yanıtı alındı.")
-                # Sanitize the direct text response before further processing or using as content
+            else: # This 'else' means it's a string, not an LLM error, and not chaotic (already handled)
+                logger.info("LLM'den doğrudan metin yanıtı alındı (kaotik değil).")
                 response_content = self._sanitize_llm_output(llm_output_or_error)
                 emotional_impact = self.emotional_system.emotional_impact_assessment(response_content)
                 if emotional_impact:
                     self.emotional_system.update_state(self.memory_system, self.embodied_self, emotional_impact, self.current_turn, "llm_direct_response_emotion")
                 final_thought = f"LLM yanıtı: {response_content[:120]}..."
-                final_content = response_content # Already sanitized
+                final_content = response_content
 
         elif isinstance(llm_output_or_error, list) and len(llm_output_or_error) > 0: # Tool call(s) requested
             logger.info(f"LLM'den araç çağrıları istendi: {llm_output_or_error}")
