@@ -1698,9 +1698,33 @@ class EnhancedAybar:
         self._check_for_guardian_logs()
         self.identity_prompt = self._load_identity()
         self.tool_definitions_for_llm = self._prepare_tool_definitions() # Initialize tool definitions
+        self.tool_categories = self._parse_tool_categories() # Parse and store tool categories
         logger.info(f"🛠️ Prepared {len(self.tool_definitions_for_llm)} tool definitions for the LLM.")
+        logger.info(f"🔩 Parsed {len(self.tool_categories)} tool categories.")
         print(f"🧬 Aybar Kimliği Yüklendi: {self.identity_prompt[:70]}...")
         print("🚀 Geliştirilmiş Aybar Başlatıldı")
+
+    def _parse_tool_categories(self) -> Dict[str, str]:
+        """
+        Parses tool categories from the docstrings of functions in the 'tools' module.
+        Categories are expected to be in the format '@category: <category_name>' in the docstring.
+        """
+        categories = {}
+        for func_name in dir(tools):
+            if func_name.startswith("_"): # Skip private/special methods
+                continue
+            func = getattr(tools, func_name)
+            if callable(func):
+                docstring = inspect.getdoc(func)
+                if docstring:
+                    match = re.search(r"@category:\s*(\w+)", docstring)
+                    if match:
+                        categories[func_name] = match.group(1).strip()
+                    else:
+                        # Assign a default category if not specified, or log a warning
+                        categories[func_name] = "general" # Default category
+                        logger.debug(f"Tool '{func_name}' has no @category tag in docstring, assigned to 'general'.")
+        return categories
 
     def _prepare_tool_definitions(self) -> List[Dict[str, Any]]:
         """
@@ -1789,6 +1813,58 @@ class EnhancedAybar:
 
         logger.debug(f"Generated tool definitions for LLM: {json.dumps(tool_defs, indent=2)}")
         return tool_defs
+
+    def _select_relevant_tools(self, goal: str) -> List[Dict[str, Any]]:
+        """
+        Selects tools relevant to the current goal based on keywords and categories.
+        """
+        if not goal or not isinstance(goal, str):
+            logger.warning("No valid goal provided for tool selection, returning all tools.")
+            return self.tool_definitions_for_llm
+
+        relevant_tool_names = set()
+        goal_lower = goal.lower()
+
+        # Always include core_utils
+        for tool_name, category in self.tool_categories.items():
+            if category == "core_utils":
+                relevant_tool_names.add(tool_name)
+
+        # Keyword-based selection for other categories
+        keyword_to_category_map = {
+            "web_interaction": ["web", "araştır", "site", "url", "tıkla", "gezinti", "sayfa"],
+            "system_interaction": ["ekran", "klavye", "fare", "kontrol", "sistem", "uygulama"],
+            "cognitive_emotional": ["hafıza", "hatırla", "düşün", "öğren", "kimlik", "hisset", "analiz et", "simüle et", "yarat"],
+            "social_interaction": ["konuş", "sor", "iletişim", "insan", "kullanıcı"],
+            # Add more mappings as needed, e.g., for file_system
+        }
+
+        for category, keywords in keyword_to_category_map.items():
+            if any(keyword in goal_lower for keyword in keywords):
+                for tool_name, cat in self.tool_categories.items():
+                    if cat == category:
+                        relevant_tool_names.add(tool_name)
+
+        # Filter the full tool definitions list
+        selected_tools = [
+            tool_def for tool_def in self.tool_definitions_for_llm
+            if tool_def.get("function", {}).get("name") in relevant_tool_names
+        ]
+
+        if not selected_tools: # Fallback if no tools are selected (e.g., goal is very abstract)
+            logger.warning(f"No specific tools selected for goal '{goal_lower}'. Falling back to core_utils or all if empty.")
+            # Return at least core_utils if they were missed, or all if even that's empty
+            if not any(tool_def.get("function", {}).get("name") in relevant_tool_names for tool_def in self.tool_definitions_for_llm if self.tool_categories.get(tool_def.get("function", {}).get("name")) == "core_utils"):
+                 core_tools_defs = [td for td in self.tool_definitions_for_llm if self.tool_categories.get(td.get("function", {}).get("name")) == "core_utils"]
+                 if core_tools_defs:
+                     selected_tools = core_tools_defs
+                     logger.info(f"Selected only core_utils tools as fallback for goal: '{goal_lower}'. Count: {len(selected_tools)}")
+                 else: # Should not happen if core_utils are defined
+                     logger.error("No core_utils tools defined for fallback. This is a configuration issue.")
+                     return self.tool_definitions_for_llm # Last resort: return all
+
+        logger.info(f"Selected {len(selected_tools)} relevant tools for goal '{goal_lower}': {[t['function']['name'] for t in selected_tools]}")
+        return selected_tools if selected_tools else self.tool_definitions_for_llm # Ensure we don't return empty list if all logic fails
 
     def _find_json_blob(self, text: str) -> Optional[str]:
         """
@@ -2864,8 +2940,11 @@ class EnhancedAybar:
         
         prompt = self._build_agent_prompt(current_task_for_llm, observation, user_id, user_input, predicted_user_emotion)
 
+        # Select relevant tools for the current task
+        relevant_tools = self._select_relevant_tools(current_task_for_llm)
+
         # Call LLM with tool definitions
-        llm_output_or_error = self._ask_llm_with_tools(prompt, tools_definitions=self.tool_definitions_for_llm)
+        llm_output_or_error = self._ask_llm_with_tools(prompt, tools_definitions=relevant_tools)
 
         # Save raw LLM output (text or tool call structure, or error string)
         raw_response_to_save = llm_output_or_error
