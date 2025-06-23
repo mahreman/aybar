@@ -2879,6 +2879,32 @@ class EnhancedAybar:
         final_thought = "LLM ile etkileşim ve araç değerlendirmesi tamamlandı."
         final_content = "Gözlemliyorum ve bir sonraki adımı düşünüyorum." # Default content
 
+        # Kaotik cevap kontrolü
+        is_chaotic_response = False
+        if isinstance(llm_output_or_error, str) and not llm_output_or_error.startswith("⚠️ LLM"):
+            # Eğer _ask_llm_with_tools'dan dönen bir hata değilse ve string ise kaotiklik kontrolü yap
+            chaotic_indicators = ['[', '{', 'def', 'import'] # Basit göstergeler
+            if any(indicator in llm_output_or_error for indicator in chaotic_indicators):
+                # Daha detaylı kontrol: Eğer metin JSON'a benzemiyorsa veya çok fazla kod içeriyorsa
+                try:
+                    # JSON'a benzeyip benzemediğini test et (çok basit bir test)
+                    if not (llm_output_or_error.strip().startswith('{') and llm_output_or_error.strip().endswith('}')) and \
+                       not (llm_output_or_error.strip().startswith('[') and llm_output_or_error.strip().endswith(']')):
+                        # Basitçe geçerli bir JSON değilse ve göstergeleri içeriyorsa kaotik say
+                        is_chaotic_response = True
+                except Exception: # Herhangi bir string işleme hatasında kaotik sayılabilir
+                    is_chaotic_response = True
+
+                if is_chaotic_response:
+                    logger.warning(f"🚨 Kaotik LLM çıktısı tespit edildi: {llm_output_or_error[:200]}...")
+                    self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 2.0, "anxiety": 1.0, "mental_fatigue": 0.5}, self.current_turn, "chaotic_llm_response")
+                    return [
+                        {
+                            "action": "summarize_and_reset",
+                            "thought": "Beynimden (LLM) anlamsız ve kaotik bir cevap geldi. Düşünce zincirim bozuldu. Kendimi sıfırlayıp, daha basit bir hedefle yeniden başlamalıyım."
+                        }
+                    ]
+
         if isinstance(llm_output_or_error, str): # Direct text response from LLM or error string from _ask_llm_with_tools
             if llm_output_or_error.startswith("⚠️ LLM"):
                 logger.error(f"LLM çağrısı başarısız: {llm_output_or_error}")
@@ -2886,15 +2912,14 @@ class EnhancedAybar:
                 final_thought = llm_output_or_error
                 # Sanitize even error messages if they become content
                 final_content = self._sanitize_llm_output("Bir iletişim hatası veya LLM sistem hatası oluştu. Bu durumu not alıyorum ve düşünmeye devam edeceğim.")
-            else:
-                logger.info("LLM'den doğrudan metin yanıtı alındı.")
-                # Sanitize the direct text response before further processing or using as content
+            else: # This 'else' means it's a string, not an LLM error, and not chaotic (already handled)
+                logger.info("LLM'den doğrudan metin yanıtı alındı (kaotik değil).")
                 response_content = self._sanitize_llm_output(llm_output_or_error)
                 emotional_impact = self.emotional_system.emotional_impact_assessment(response_content)
                 if emotional_impact:
                     self.emotional_system.update_state(self.memory_system, self.embodied_self, emotional_impact, self.current_turn, "llm_direct_response_emotion")
                 final_thought = f"LLM yanıtı: {response_content[:120]}..."
-                final_content = response_content # Already sanitized
+                final_content = response_content
 
         elif isinstance(llm_output_or_error, list) and len(llm_output_or_error) > 0: # Tool call(s) requested
             logger.info(f"LLM'den araç çağrıları istendi: {llm_output_or_error}")
