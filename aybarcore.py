@@ -1103,7 +1103,7 @@ class SelfEvolutionSystem:
         """
         Bellekten son etkileşimleri alır ve LLM'e problem tanımı üretmesi için gönderir.
         """
-        recent_memories = self.aybar.memory_system.get_recent_memories(n=10, memory_type="semantic")
+        recent_memories = self.aybar.memory_system.get_memory(layer="semantic", num_records=10)
     
         if not recent_memories:
             print("🧩 Bellekten anlamlı yansıma verisi alınamadı.")
