@@ -368,7 +368,7 @@ def keyboard_type(text_to_type: str, aybar_instance: EnhancedAybarType, thought:
         tool_logger.warning("'computer_control_system' not found on aybar_instance.")
         return "Keyboard control system is not available."
 
-def mouse_click(x: int, y: int, double_click: bool = False, aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
+def mouse_click(aybar_instance: EnhancedAybarType, x: int, y: int, double_click: bool = False, thought: Optional[str] = None) -> str:
     """
     Performs a mouse click (or double click) at the specified screen coordinates.
     This interacts with the ComputerControlSystem.
