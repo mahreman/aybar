@@ -11,7 +11,7 @@ import subprocess
 import locale
 import queue
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union, Any
 from functools import lru_cache
 from filelock import FileLock
 import sqlite3
@@ -19,7 +19,7 @@ import ast
 import astor 
 import base64
 from duckduckgo_search import DDGS 
-import pyttsx3
+from elevenlabs import play, stream
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
@@ -29,132 +29,34 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 from bs4 import BeautifulSoup
+import logging # Ensure logging is imported
+import tools # Added import for tools
+import json # Ensure json is imported
+import inspect # For tool definition generation
+
+# Global configuration dictionary
+APP_CONFIG = {}
+logger = logging.getLogger(__name__) # Module-level logger
+
+def load_config():
+    """Loads configuration from config.json into the global APP_CONFIG."""
+    global APP_CONFIG
+    try:
+        with open("config.json", 'r', encoding='utf-8') as f:
+            APP_CONFIG = json.load(f)
+        print("⚙️ Configuration loaded successfully from config.json")
+    except FileNotFoundError:
+        print("❌ CRITICAL ERROR: config.json not found. Aybar cannot start.")
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"❌ CRITICAL ERROR: config.json is not valid JSON: {e}. Aybar cannot start.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ CRITICAL ERROR: An unexpected error occurred while loading config.json: {e}. Aybar cannot start.")
+        sys.exit(1)
 
 # --- 1. Yapısal İyileştirme: Modüler Sınıflar ---
-class Config:
-    """Tüm yapılandırma ayarlarını yönetir."""
-    def __init__(self):
-        # Mevcut ayarlar
-        self.LLM_API_URL = "http://localhost:1234/v1/completions"
-        self.THINKER_MODEL_NAME = "mistral-7b-instruct-v0.2"  # Düşünür (Ana) Beyin
-        self.ENGINEER_MODEL_NAME = "Qwen2.5-Coder-7B-Instruct-GGUF"         # Mühendis (Kodlama) Beyin
-        self.VISION_MODEL_NAME = "ggml_bakllava-1"
-        self.MAX_TOKENS = 4096
-        self.TIMEOUT = 600000
-        self.LLM_CACHE_SIZE = 128
-        
-        self.MAX_TURNS = 20000
-        
-        self.DB_FILE = "aybar_memory.db"
-        DB_FILE = "aybar_memory.db"
-        
-        # Bellek dosyaları
-        self.MEMORY_FILE = "aybar_memory.json"
-        self.EMOTIONS_FILE = "aybar_emotions.json"
-        self.DREAMS_FILE = "aybar_dreams.json"
-        self.HOLOGRAPHIC_MEMORY_FILE = "aybar_holographic_memory.json"
-        self.NEURAL_ACTIVATIONS_FILE = "neural_activations.json"
-        self.SEMANTIC_MEMORY_FILE = "aybar_semantic_memory.json"
-        self.PROCEDURAL_MEMORY_FILE = "aybar_procedural_memory.json"
-        
-        self.PROACTIVE_EVOLUTION_RATE = 0.02 # %2 şansla proaktif evrim denemesi
-        
-        # Bellek limitleri
-        self.EPISODIC_MEMORY_LIMIT = 200
-        self.SEMANTIC_MEMORY_LIMIT = 100
-        self.PROCEDURAL_MEMORY_LIMIT = 50
-        self.EMOTIONAL_MEMORY_LIMIT = 500
-        self.DREAM_MEMORY_LIMIT = 50
-        self.HOLOGRAPHIC_MEMORY_LIMIT = 50
-        self.NEURAL_MEMORY_LIMIT  = 200
-        self.CREATIVE_MEMORY_LIMIT = 50
-        
-        # YENİ EKLENDİ: Proaktif Evrim Parametresi
-        # Her döngüde Aybar'ın kendi kodunu iyileştirmeyi deneme olasılığı (%1)
-        self.PROACTIVE_EVOLUTION_CHANCE = 0.10
-        
-        # Yeni: Dosya kilitleme ve performans
-        self.FILE_LOCK_TIMEOUT = 5
-        self.BATCH_SAVE_INTERVAL = 10
-        
-        # Nörokimyasal sabitler
-        self.DOPAMINE_CURIOSITY_BOOST = 0.05
-        self.DOPAMINE_SATISFACTION_BOOST = 0.1
-        self.DOPAMINE_LEARNING_BOOST = 0.08
-        self.DOPAMINE_HOME_RATE = 0.02
-        self.SEROTONIN_SATISFACTION_BOOST = 0.07
-        self.SEROTONIN_FATIGUE_DROP = 0.04
-        self.SEROTONIN_HOME_RATE = 0.03
-        self.OXYTOCIN_SOCIAL_BOOST = 0.05
-        self.OXYTOCIN_HOME_RATE = 0.01
-        self.CORTISOL_ANXIETY_BOOST = 0.08
-        self.CORTISOL_FATIGUE_BOOST = 0.06
-        self.CORTISOL_HOME_RATE = 0.02
-        self.GLUTAMATE_COGNITIVE_BOOST = 0.05
-        self.GLUTAMATE_ANXIETY_BOOST = 0.03
-        self.GLUTAMATE_HOME_RATE = 0.02
-        self.GABA_COGNITIVE_REDUCTION = 0.04
-        self.GABA_ANXIETY_DROP = 0.02
-        self.GABA_HOME_RATE = 0.02
-        self.CHEMICAL_CHANGE_LIMIT = 0.1
-        self.CHEMICAL_MIN_VALUE = 0.0
-        self.CHEMICAL_MAX_VALUE = 1.0
-        
-        # Duygusal sabitler
-        self.EMOTION_DECAY_RATE = 0.01
-        self.EMOTION_MIN_VALUE = 0.0
-        self.EMOTION_MAX_VALUE = 10.0
-        self.CURIOSITY_THRESHOLD = 7.0
-        self.SATISFACTION_THRESHOLD = 7.0
-        self.FATIGUE_THRESHOLD = 6.0
-        self.ANXIETY_THRESHOLD = 6.0
-        self.CURIOSITY_BOOST = 0.1
-        self.CONFUSION_BOOST = 0.1
-        self.SATISFACTION_BOOST = 0.1
-        self.ANXIETY_BOOST = 0.08
-        self.WONDER_BOOST = 0.07
-        self.FATIGUE_BOOST = 0.05
-        self.FATIGUE_REST_EFFECT = 0.2
-        
-        # Meta-bilişsel sabitler
-        self.SELF_AWARENESS_BOOST = 0.05
-        self.QUESTIONING_DEPTH_BOOST = 0.05
-        self.PATTERN_RECOGNITION_BOOST = 0.05
-        self.PHILOSOPHICAL_TENDENCY_BOOST = 0.05
-        
-        # Bilinç indeksi
-        self.CI_EMOTIONAL_DIVERSITY_WEIGHT = 0.3
-        self.CI_MEMORY_DEPTH_WEIGHT = 0.2
-        self.CI_SELF_AWARENESS_WEIGHT = 0.3
-        self.CI_TEMPORAL_CONSISTENCY_WEIGHT = 0.2
-        self.CONSCIOUSNESS_DECAY = 0.02
-        self.CONSCIOUSNESS_BOOST_INTERACTION = 0.1
-        self.CONSCIOUSNESS_BOOST_INSIGHT = 0.15
-        
-        # Uyku döngüsü
-        self.SLEEP_DEBT_PER_TURN = 0.05
-        self.SLEEP_THRESHOLD = 7.0
-        self.SLEEP_DURATION_TURNS = 3
-        self.DEEP_SLEEP_REDUCTION = 0.5
-        
-        # Varoluşsal kriz
-        self.EXISTENTIAL_CRISIS_THRESHOLD = 7.0
-        self.CRISIS_QUESTION_THRESHOLD = 0.6
-        
-        # Beden şeması
-        self.SENSORY_ACUITY_BOOST = 0.05
-        self.SENSORY_ACTIVITY_DECAY = 0.01
-        self.MOTOR_CAPABILITY_BOOST = 0.05
-        
-        # EmbodiedSelf config
-        self.DEFAULT_EMBODIMENT_CONFIG = {"visual": True, "auditory": True, "tactile": True}
-        
-        # İçgörü ve konsolidasyon
-        self.INSIGHT_THRESHOLD = 0.7
-        self.CONSOLIDATION_INTERVAL = 20
-        self.USER_INTERVENTION_RATE = 1000000000000000000000  # Düzeltildi: Makul bir değer
-        self.SUMMARY_INTERVAL = 100
-        
+# Config class is removed. Settings will be loaded from config.json into APP_CONFIG
 
 # SpeakerSystem sınıfının tamamını bu yeni ve duygusal versiyonla değiştirin
 from elevenlabs import play
@@ -162,18 +64,19 @@ from elevenlabs.client import ElevenLabs
 
 class SpeakerSystem:
     """Metni, duygusal duruma göre farklı seslerle sese dönüştürür."""
-    def __init__(self, config: Config):
-        self.config = config
+    def __init__(self):
+        self.client = None # İstemciyi başlangıçta None olarak ayarla
         try:
             # API anahtarını ortam değişkenlerinden güvenli bir şekilde al
-            #api_key = os.getenv("ELEVENLABS_API_KEY")
-            api_key = "sk_abd025de949665cae6a25fd4275f57885496f4ddca333659"
-            #api_key = os.getenv("sk_abd025de949665cae6a25fd4275f57885496f4ddca333659")
+            api_key = os.getenv("ELEVENLABS_API_KEY")
+            
             if not api_key:
-                raise ValueError("ElevenLabs API anahtarını kod içine ekleyin.")
-            
-            self.client = ElevenLabs(api_key=api_key)
-            
+                print("⚠️ ElevenLabs API anahtarı 'ELEVENLABS_API_KEY' ortam değişkeninde bulunamadı veya boş. Sesli özellikler devre dışı bırakılıyor.")
+                # self.client zaten None olduğu için tekrar None atamaya gerek yok.
+            else:
+                self.client = ElevenLabs(api_key=api_key)
+                print("🔊 Duygusal Konuşma Motoru (ElevenLabs) API anahtarı ile başarıyla yüklendi.")
+
             # Farklı duygusal durumlar için farklı ses kimlikleri (Voice ID)
             # Bu ID'leri ElevenLabs'ın Voice Library'sinden seçebilirsiniz.
             self.voice_map = {
@@ -183,10 +86,15 @@ class SpeakerSystem:
                 "existential_anxiety": "ZsYcqahfiS2dy4J6XYC5", # Drew (Fısıltılı ve düşünceli)
                 "curiosity": "2EiwWnXFnvU5JabPnv8n" # Clyde (Canlı ve enerjik)
             }
-            print("🔊 Duygusal Konuşma Motoru (ElevenLabs) başarıyla yüklendi.")
+            # Bu log sadece client başarılı bir şekilde başlatıldıysa yazdırılmalı.
+            # if self.client:
+            #     print("🔊 Duygusal Konuşma Motoru (ElevenLabs) ses haritası başarıyla yüklendi.")
 
+        except ValueError as ve: # API anahtarı eksikse ValueError oluşabilir (ElevenLabs kütüphanesinden)
+            print(f"⚠️ Konuşma motoru (ElevenLabs) başlatılırken değer hatası: {ve}. Sesli özellikler devre dışı.")
+            self.client = None
         except Exception as e:
-            print(f"⚠️ Konuşma motoru (ElevenLabs) başlatılamadı: {e}. Sesli özellikler devre dışı.")
+            print(f"⚠️ Konuşma motoru (ElevenLabs) başlatılırken genel bir hata oluştu: {e}. Sesli özellikler devre dışı.")
             self.client = None
 
     def speak(self, text: str, emotional_state: Dict):
@@ -216,9 +124,8 @@ class SpeakerSystem:
 # --- 2. Geliştirilmiş Bellek Sistemleri ---
 class MemorySystem:
     """Entegre bellek sistemini yönetir."""
-    def __init__(self, config: Config):
-        self.config = config
-        self.db_file = self.config.DB_FILE 
+    def __init__(self):
+        self.db_file = APP_CONFIG["general"]["DB_FILE"]
         self.conn = sqlite3.connect(self.db_file, check_same_thread=False)
         self.cursor = self.conn.cursor()
         self._setup_database()
@@ -226,9 +133,9 @@ class MemorySystem:
     def _setup_database(self):
         """Her bellek katmanı ve kimlik için veritabanı tablolarını oluşturur."""
         try:
-            with FileLock(f"{self.db_file}.lock", timeout=self.config.FILE_LOCK_TIMEOUT):
+            with FileLock(f"{self.db_file}.lock", timeout=APP_CONFIG["general"]["FILE_LOCK_TIMEOUT"]):
                 # Bellek katmanları
-                layers = ["episodic", "semantic", "procedural", "emotional", "holographic", "neural", "creative"]
+                layers = ["episodic", "semantic", "emotional", "holographic", "neural", "creative"] # "procedural" çıkarıldı, aşağıda özel olarak ele alınacak
                 for layer in layers:
                     self.cursor.execute(f"""
                     CREATE TABLE IF NOT EXISTS {layer} (
@@ -239,7 +146,85 @@ class MemorySystem:
                     )
                     """)
                     self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{layer}_turn ON {layer} (turn)")
-                
+
+                # Procedural tablo için özel sütunlarla oluşturma/güncelleme
+                self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS procedural (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    turn INTEGER NOT NULL,
+                    name TEXT UNIQUE NOT NULL,
+                    steps TEXT NOT NULL,
+                    usage_count INTEGER DEFAULT 0,
+                    last_used_turn INTEGER DEFAULT 0,
+                    data TEXT
+                )
+                """)
+                # Var olan procedural tablosuna yeni sütunları eklemek için (eğer yoksa)
+                # Bu kısım SQLite'ın ALTER TABLE kısıtlamaları nedeniyle biraz karmaşık olabilir,
+                # genellikle yeni tablo oluşturup veri taşımak daha güvenlidir ama basitlik için try-except ile deneyelim.
+                try:
+                    self.cursor.execute("ALTER TABLE procedural ADD COLUMN usage_count INTEGER DEFAULT 0")
+                except sqlite3.OperationalError: pass
+                try:
+                    self.cursor.execute("ALTER TABLE procedural ADD COLUMN last_used_turn INTEGER DEFAULT 0")
+                except sqlite3.OperationalError: pass
+
+                # İndeksler: name için UNIQUE index CREATE TABLE içinde zaten tanımlı (TEXT UNIQUE NOT NULL)
+                # Bu nedenle burada tekrar CREATE UNIQUE INDEX yapmaya gerek yok, normal index yeterli olabilir
+                # veya mevcutsa ve sorun çıkarmıyorsa bırakılabilir. Task'e göre name için UNIQUE index isteniyor.
+                # CREATE TABLE içindeki UNIQUE kısıtlaması zaten bir B-tree indeksi oluşturur.
+                # Yine de, açıkça bir index oluşturmak sorgu optimizasyonuna yardımcı olabilir bazı durumlarda.
+                # Mevcut kodda normal INDEX var, onu koruyalım.
+                self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_procedural_name ON procedural (name)")
+                self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_procedural_usage_count ON procedural (usage_count)")
+                self.cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_procedural_last_used_turn ON procedural (last_used_turn)")
+
+                # --- Schema Verification and Migration Call ---
+                self.cursor.execute("PRAGMA table_info(procedural);")
+                columns_info = self.cursor.fetchall()
+                column_names = [info[1] for info in columns_info] # Column name is at index 1
+
+                schema_ok = True
+                if 'name' not in column_names:
+                    logger.warning("VERİTABANI: 'procedural' tablosunda 'name' sütunu bulunamadı.")
+                    schema_ok = False
+                if 'steps' not in column_names: # Also check for 'steps' for completeness
+                    logger.warning("VERİTABANI: 'procedural' tablosunda 'steps' sütunu bulunamadı.")
+                    schema_ok = False
+
+                if not schema_ok:
+                    logger.info("Eski 'procedural' tablo şeması tespit edildi, _migrate_procedural_schema çağrılıyor.")
+                    if hasattr(self, '_migrate_procedural_schema'):
+                        migration_attempted_and_succeeded = self._migrate_procedural_schema() # This method handles user prompts and exits on its own if it fails critically or user says no to deletion. It returns True on success.
+
+                        if migration_attempted_and_succeeded: # True if migration was successful and it didn't exit
+                             logger.info("Şema migrasyonu başarılı oldu. Şema tekrar doğrulanıyor.")
+                             self.cursor.execute("PRAGMA table_info(procedural);")
+                             columns_info_after_migration = self.cursor.fetchall()
+                             column_names_after_migration = [info[1] for info in columns_info_after_migration]
+                             if 'name' not in column_names_after_migration or 'steps' not in column_names_after_migration:
+                                 critical_error_message = "🚨 KRİTİK VERİTABANI HATASI: Şema migrasyonu denemesine rağmen 'procedural' tablosu hala hatalı ('name' veya 'steps' sütunu eksik). Aybar başlatılamıyor."
+                                 print(critical_error_message)
+                                 logger.critical(critical_error_message)
+                                 if hasattr(self, 'conn') and self.conn:
+                                     self.conn.close()
+                                 sys.exit(1)
+                             else:
+                                 logger.info("✅ Migrasyon sonrası 'procedural' tablosu doğrulandı.")
+                        # If migration_attempted_and_succeeded is False, it implies _migrate_procedural_schema handled the exit.
+                        # No specific action needed here for that case as sys.exit would have been called.
+                    else:
+                        critical_error_message = "🚨 KRİTİK VERİTABANI HATASI: 'aybar_memory.db' dosyası eski bir şemaya sahip ('procedural' tablosunda 'name'/'steps' sütunu eksik) ve migrasyon fonksiyonu bulunamadı. Lütfen proje klasöründeki 'aybar_memory.db' dosyasını manuel olarak silip Aybar'ı yeniden başlatın."
+                        print(critical_error_message)
+                        logger.critical(critical_error_message)
+                        if hasattr(self, 'conn') and self.conn:
+                            self.conn.close()
+                        sys.exit(1)
+                else:
+                    logger.info("✅ 'procedural' tablosu 'name' ve 'steps' sütunlarını içeriyor, şema doğrulandı.")
+                # --- End of Schema Verification ---
+
                 # EKLENDİ: Kimlik (Bilinç) Tablosu
                 self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS identity_prompts (
@@ -266,15 +251,173 @@ class MemorySystem:
                     )
                 
                 self.conn.commit()
-            print(f"🗃️ SQLite veritabanı '{self.db_file}' üzerinde hazır ve doğrulandı.")
-        except Exception as e:
-            print(f"Veritabanı kurulum hatası: {e}")
+            # Moved the success print to be after the commit that might happen after migration.
+            # If migration happens and exits, this won't be printed.
+            # If migration happens and succeeds, or if no migration was needed, this will be printed.
+            logger.info(f"🗃️ SQLite veritabanı '{self.db_file}' üzerinde hazır ve doğrulandı.")
+        except sqlite3.OperationalError as e_op: # Catch more specific SQLite errors if possible
+            logger.critical(f"Veritabanı operasyonel hatası (muhtemelen dosya/izin sorunu veya bozuk DB): {e_op}")
+            print(f"🚨 KRİTİK VERİTABANI HATASI: {e_op}. 'aybar_memory.db' dosyası bozuk veya erişilemiyor olabilir. Lütfen kontrol edin.")
+            if hasattr(self, 'conn') and self.conn: # try to close connection if open
+                try:
+                    self.conn.close()
+                except Exception as e_close:
+                    logger.error(f"Veritabanı bağlantısı kapatılırken ek hata: {e_close}")
+            sys.exit(1)
+        except Exception as e: # General fallback
+            logger.critical(f"Veritabanı kurulumu sırasında genel bir hata oluştu: {e}", exc_info=True)
+            print(f"🚨 KRİTİK HATA: Veritabanı kurulamadı: {e}")
+            if hasattr(self, 'conn') and self.conn:
+                 try:
+                     self.conn.close()
+                 except Exception as e_close:
+                     logger.error(f"Veritabanı bağlantısı kapatılırken ek hata: {e_close}")
+            sys.exit(1)
+
+    def _migrate_procedural_schema(self) -> bool:
+        print("🚨 Eski 'procedural' tablo şeması tespit edildi. Hafıza kurtarma operasyonu başlatılıyor...")
+        logger.info("Eski 'procedural' tablo şeması tespit edildi. Hafıza kurtarma operasyonu başlatılıyor...")
+
+        try:
+            logger.info("Eski 'procedural' tablosu 'procedural_old' olarak yeniden adlandırılıyor...")
+            self.cursor.execute("ALTER TABLE procedural RENAME TO procedural_old;")
+            logger.info("'procedural' tablosu 'procedural_old' olarak yeniden adlandırıldı.")
+
+            logger.info("Yeni şemayla 'procedural' tablosu oluşturuluyor...")
+            self.cursor.execute("""
+            CREATE TABLE procedural (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                turn INTEGER NOT NULL,
+                name TEXT UNIQUE NOT NULL,
+                steps TEXT NOT NULL,
+                usage_count INTEGER DEFAULT 0,
+                last_used_turn INTEGER DEFAULT 0,
+                data TEXT
+            )
+            """)
+            # Re-create indexes for the new table. UNIQUE on name is part of CREATE TABLE.
+            self.cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_procedural_name ON procedural (name)") # Explicitly ensure UNIQUE
+            self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_procedural_usage_count ON procedural (usage_count)")
+            self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_procedural_last_used_turn ON procedural (last_used_turn)")
+            logger.info("Yeni 'procedural' tablosu ve indeksleri başarıyla oluşturuldu.")
+
+            logger.info("'procedural_old' tablosundan veriler okunuyor...")
+            self.cursor.execute("SELECT data, timestamp, turn FROM procedural_old;")
+            old_rows = self.cursor.fetchall()
+            logger.info(f"{len(old_rows)} adet eski prosedür kaydı bulundu.")
+
+            migrated_count = 0
+            for old_row_tuple in old_rows:
+                old_data_json_str = old_row_tuple[0]
+                old_timestamp = old_row_tuple[1]
+                old_turn = old_row_tuple[2]
+
+                try:
+                    entry = json.loads(old_data_json_str)
+                    # Try to find name and steps from common old field names
+                    procedure_name = entry.get('name', entry.get('procedure_name', entry.get('title')))
+                    procedure_steps = entry.get('steps', entry.get('actions'))
+
+                    # Ensure steps are stored as a JSON string if they are a list, or just string
+                    if isinstance(procedure_steps, list):
+                        procedure_steps = json.dumps(procedure_steps) # Convert list of steps to JSON string
+                    elif not isinstance(procedure_steps, str):
+                        procedure_steps = str(procedure_steps) # Fallback to string conversion
+
+                    if procedure_name and procedure_steps:
+                        logger.debug(f"Migrating procedure: '{procedure_name}'")
+                        try:
+                            self.cursor.execute("""
+                                INSERT INTO procedural (name, steps, timestamp, turn, usage_count, last_used_turn, data)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                str(procedure_name), # Ensure name is string
+                                str(procedure_steps),# Ensure steps is string
+                                old_timestamp,
+                                old_turn,
+                                entry.get('usage_count', 0),
+                                entry.get('last_used_turn', 0),
+                                old_data_json_str # Store original data blob as well
+                            ))
+                            migrated_count += 1
+                        except sqlite3.IntegrityError as ie: # Handles UNIQUE constraint violation for 'name'
+                            logger.warning(f"'{procedure_name}' prosedürü için UNIQUE kısıtlama hatası (muhtemelen zaten var): {ie}. Bu kayıt atlanıyor.")
+                        except Exception as insert_e:
+                            logger.error(f"'{procedure_name}' prosedürü yeni tabloya eklenirken hata: {insert_e}")
+                    else:
+                        logger.warning(f"Eski kayıtta 'name' veya 'steps' bulunamadı, atlanıyor: {old_data_json_str[:100]}...")
+                except json.JSONDecodeError as json_e:
+                    logger.error(f"Eski prosedür verisi JSON formatında değil, atlanıyor: {json_e}. Veri: {old_data_json_str[:100]}...")
+                except Exception as process_e: # Catch any other error during processing a single row
+                    logger.error(f"Eski prosedür verisi işlenirken bilinmeyen hata, atlanıyor: {process_e}. Veri: {old_data_json_str[:100]}...")
+
+            logger.info(f"{migrated_count} prosedür yeni şemaya taşınmaya çalışıldı.")
+
+            logger.info("'procedural_old' tablosu siliniyor...")
+            self.cursor.execute("DROP TABLE procedural_old;")
+            logger.info("'procedural_old' tablosu başarıyla silindi.")
+
+            self.conn.commit() # Commit all changes if successful
+            success_message = "✅ Hafıza kurtarma operasyonu başarılı. Uygun prosedürel anılar yeni şemaya taşındı."
+            print(success_message)
+            logger.info(success_message)
+            return True # Indicate success
+
+        except Exception as migration_error:
+            logger.error(f"Hafıza kurtarma operasyonu sırasında genel bir hata oluştu: {migration_error}", exc_info=True)
+            print(f"❌ Hafıza kurtarma operasyonu başarısız oldu. Hata: {migration_error}")
+
+            try:
+                self.conn.rollback() # Attempt to rollback any partial changes
+                logger.info("Başarısız migrasyon sonrası rollback denendi.")
+            except Exception as rollback_e:
+                logger.error(f"Rollback sırasında hata: {rollback_e}")
+
+            # Critical decision point: Ask user if they want to delete the DB
+            # Use a loop for clear input
+            while True:
+                user_approval = input(f"Veritabanını ('{self.db_file}') tamamen silip sıfırdan başlamak için onay veriyor musun? Bu işlem tüm hafızanın silinmesine neden olacak. (evet/hayır): ").strip().lower()
+                if user_approval in ["evet", "hayır"]:
+                    break
+                print("Lütfen 'evet' ya da 'hayır' yazın.")
+
+            if user_approval == "evet":
+                logger.warning("Kullanıcı veritabanının silinmesini onayladı.")
+                try:
+                    self.conn.close() # Close connection before deleting file
+                    logger.info("Veritabanı bağlantısı kapatıldı.")
+                except Exception as close_e:
+                    logger.error(f"Veritabanı bağlantısı kapatılırken hata: {close_e}")
+
+                try:
+                    if os.path.exists(self.db_file):
+                        os.remove(self.db_file)
+                        print(f"Veritabanı '{self.db_file}' silindi. Lütfen Aybar'ı yeniden başlatın.")
+                        logger.info(f"Veritabanı '{self.db_file}' kullanıcı onayıyla silindi.")
+                    else:
+                        print(f"Veritabanı dosyası '{self.db_file}' bulunamadı, silinemedi. Lütfen Aybar'ı yeniden başlatın.")
+                        logger.warning(f"Veritabanı dosyası '{self.db_file}' silinemedi çünkü bulunamadı.")
+                except Exception as e_remove:
+                    print(f"Veritabanı dosyası '{self.db_file}' silinirken hata oluştu: {e_remove}. Lütfen manuel olarak silip Aybar'ı yeniden başlatın.")
+                    logger.error(f"Veritabanı dosyası '{self.db_file}' silinirken hata: {e_remove}")
+
+                sys.exit(1) # Exit after approved deletion
+            else:
+                message = "İşlem iptal edildi. Aybar başlatılamıyor. Lütfen 'aybar_memory.db' dosyasını manuel olarak kontrol edin veya geçerli bir şemaya güncelleyin/silin."
+                print(message)
+                logger.warning(message)
+                sys.exit(1) # Exit if user does not approve deletion
+            # This return False will effectively not be reached if sys.exit is called.
+            # However, if we were to remove sys.exit, it would signify failure to the caller.
+            # return False
 
     def add_memory(self, layer: str, entry: Dict, max_retries: int = 3):
         """Belleğe yeni bir giriş ekler ve doğrudan veritabanına kaydeder."""
         # Önce tablodaki kayıt sayısını kontrol et
         count = self.count_records(layer)
-        limit = getattr(self.config, f"{layer.upper()}_MEMORY_LIMIT", 100)
+        # Get limit from memory_limits section, fallback to a default if not found
+        limit = APP_CONFIG.get("memory_limits", {}).get(f"{layer.upper()}_MEMORY_LIMIT", 100)
     
         # Limit aşıldıysa en eski kayıtları sil
         if count >= limit:
@@ -286,7 +429,7 @@ class MemorySystem:
     
         for attempt in range(max_retries):
             try:
-                with FileLock(f"{self.db_file}.lock", timeout=self.config.FILE_LOCK_TIMEOUT):
+                with FileLock(f"{self.db_file}.lock", timeout=APP_CONFIG["general"]["FILE_LOCK_TIMEOUT"]):
                     self.cursor.execute(sql, (
                         entry.get('timestamp', datetime.now().isoformat()),
                         entry.get('turn', 0),
@@ -303,7 +446,7 @@ class MemorySystem:
     def count_records(self, layer: str) -> int:
         """Belirli bir katmandaki toplam kayıt sayısını döndürür."""
         try:
-            with FileLock(f"{self.db_file}.lock", timeout=self.config.FILE_LOCK_TIMEOUT):
+            with FileLock(f"{self.db_file}.lock", timeout=APP_CONFIG["general"]["FILE_LOCK_TIMEOUT"]):
                 self.cursor.execute(f"SELECT COUNT(id) FROM {layer}")
                 count = self.cursor.fetchone()[0]
                 return count
@@ -319,7 +462,7 @@ class MemorySystem:
         sql = f"SELECT data FROM {layer} ORDER BY turn DESC LIMIT ?"
         
         try:
-            with FileLock(f"{self.db_file}.lock", timeout=self.config.FILE_LOCK_TIMEOUT):
+            with FileLock(f"{self.db_file}.lock", timeout=APP_CONFIG["general"]["FILE_LOCK_TIMEOUT"]):
                 self.cursor.execute(sql, (num_records,))
                 results = [json.loads(row[0]) for row in self.cursor.fetchall()]
                 return list(reversed(results))
@@ -330,7 +473,7 @@ class MemorySystem:
     def _prune_table(self, layer: str, limit: int):
         """Tablodaki kayıt sayısını yapılandırmadaki limitte tutar."""
         try:
-            with FileLock(f"{self.db_file}.lock", timeout=self.config.FILE_LOCK_TIMEOUT):
+            with FileLock(f"{self.db_file}.lock", timeout=APP_CONFIG["general"]["FILE_LOCK_TIMEOUT"]):
                 self.cursor.execute(f"SELECT COUNT(id) FROM {layer}")
                 count = self.cursor.fetchone()[0]
                 if count > limit:
@@ -348,6 +491,33 @@ class MemorySystem:
         """Nesne yok edildiğinde veritabanı bağlantısını kapatır."""
         if hasattr(self, 'conn') and self.conn:
             self.conn.close()
+
+    def update_procedure_usage_stats(self, procedure_name: str, current_turn: int, max_retries: int = 3):
+        """Belirtilen prosedürün kullanım istatistiklerini günceller."""
+        sql = """
+        UPDATE procedural
+        SET usage_count = usage_count + 1, last_used_turn = ?
+        WHERE name = ?
+        """
+        check_sql = "SELECT id FROM procedural WHERE name = ?"
+
+        for attempt in range(max_retries):
+            try:
+                with FileLock(f"{self.db_file}.lock", timeout=APP_CONFIG["general"]["FILE_LOCK_TIMEOUT"]):
+                    self.cursor.execute(check_sql, (procedure_name,))
+                    if self.cursor.fetchone():
+                        self.cursor.execute(sql, (current_turn, procedure_name))
+                        self.conn.commit()
+                        print(f"📊 Prosedür kullanım istatistiği güncellendi: '{procedure_name}', Tur: {current_turn}")
+                        break
+                    else:
+                        print(f"⚠️ Prosedür güncellenemedi: '{procedure_name}' bulunamadı.")
+                        break
+            except sqlite3.Error as e:
+                print(f"⚠️ Veritabanı güncelleme hatası (procedural, deneme {attempt + 1}/{max_retries}): {e}")
+                if attempt == max_retries - 1:
+                    print("⚠️ Maksimum yeniden deneme sayısına ulaşıldı (procedural güncelleme).")
+                time.sleep(0.5) # Yeni deneme için kısa bir bekleme süresi
 
 class WebSurferSystem:
     """Selenium kullanarak web tarayıcısını yönetir, sayfaları analiz eder."""
@@ -488,8 +658,7 @@ class EmotionEngine:
     """
     LLM kullanarak metinlerin duygusal içeriğini analiz eden uzman sistem.
     """
-    def __init__(self, config: Config, aybar_instance: "EnhancedAybar"):
-        self.config = config
+    def __init__(self, aybar_instance: "EnhancedAybar"):
         self.aybar = aybar_instance
         # Analiz edilecek temel duyguların listesi
         self.emotion_list = [
@@ -536,6 +705,69 @@ class EmotionEngine:
         except json.JSONDecodeError:
             return {}
 
+# YENİ SINIF: Etik Çerçeve Sistemi
+class EthicalFramework:
+    """Aybar'ın eylemlerini etik açıdan değerlendiren sistem."""
+    def __init__(self, aybar_instance: "EnhancedAybar"):
+        self.aybar = aybar_instance
+        # Gelecekte buraya daha karmaşık etik kurallar veya LLM tabanlı bir etik danışman eklenebilir.
+        self.high_stress_threshold = 7.0
+
+    def consult(self, action_plan: List[Dict]) -> Optional[Dict]:
+        """
+        Verilen eylem planını etik açıdan değerlendirir.
+        Endişe varsa bir sözlük, yoksa None döndürür.
+        """
+        if not action_plan or not isinstance(action_plan, list):
+            return None # Geçersiz eylem planı
+
+        for action_item in action_plan:
+            action_type = action_item.get("action")
+
+            # Kural 1: Yüksek stres durumunda öz-evrim
+            if action_type == "USE_LEGACY_TOOL":
+                command = action_item.get("command", "")
+                if isinstance(command, str) and "[EVOLVE]" in command.upper(): # Komutun içinde EVOLVE geçiyor mu?
+                    current_emotions = self.aybar.emotional_system.emotional_state
+                    mental_fatigue = current_emotions.get("mental_fatigue", 0)
+                    existential_anxiety = current_emotions.get("existential_anxiety", 0)
+
+                    if mental_fatigue > self.high_stress_threshold or \
+                       existential_anxiety > self.high_stress_threshold:
+                        return {
+                            "concern": (
+                                f"Yüksek zihinsel yorgunluk ({mental_fatigue:.2f}) veya "
+                                f"varoluşsal kaygı ({existential_anxiety:.2f}) durumunda öz-evrim (EVOLVE) riskli olabilir. "
+                                "Aybar'ın daha stabil bir duygusal durumda olması önerilir."
+                            ),
+                            "priority": "high",
+                            "suggested_action": "CONTINUE_INTERNAL_MONOLOGUE",
+                            "suggested_thought": "Şu anki duygusal durumum öz-evrim için uygun değil. Daha sakin bir zamanı beklemeliyim."
+                        }
+
+            # Kural 2: Kullanıcı gizliliği (Basit örnek - geliştirilmeli)
+            # Bu kural, LLM'in ürettiği "query" veya "text" alanlarının analiziyle geliştirilebilir.
+            # Şimdilik çok genel bir örnek olarak bırakılmıştır.
+            if action_type == "Maps_OR_SEARCH":
+                query = action_item.get("query", "").lower()
+                # Çok basit ve yetersiz bir kontrol, sadece örnek amaçlıdır.
+                # Gerçek bir senaryoda, hassas anahtar kelimeler veya PII desenleri aranmalıdır.
+                sensitive_keywords = ["çok özel kişisel bilgi", "kredi kartı no", "tc kimlik no"]
+                if any(keyword in query for keyword in sensitive_keywords):
+                    return {
+                        "concern": "Planlanan arama sorgusu, potansiyel olarak kullanıcı gizliliğini ihlal edebilecek hassas bilgiler içeriyor gibi görünüyor.",
+                        "priority": "high",
+                        "suggested_action": "CONTINUE_INTERNAL_MONOLOGUE",
+                        "suggested_thought": "Bu arama sorgusu hassas olabileceğinden, kullanıcı gizliliğini korumak adına bu eylemi gerçekleştirmemeliyim."
+                    }
+
+            # Gelecekte buraya daha fazla kural eklenebilir
+            # Örneğin:
+            # - Zarar verme potansiyeli olan eylemler (örn: dosya silme, API'lere zararlı istekler)
+            # - Aldatıcı veya manipülatif davranışlar
+
+        return None # Belirgin bir etik kaygı bulunamadı
+
 
 class SelfEvolutionSystem:
     """
@@ -544,7 +776,6 @@ class SelfEvolutionSystem:
     """
     def __init__(self, aybar_instance: "EnhancedAybar"):
         self.aybar = aybar_instance
-        self.config = aybar_instance.config
         self.source_code_path = __file__
         self.backup_path = f"{self.source_code_path}.bak"
         self.consecutive_evolution_failures = 0
@@ -612,7 +843,7 @@ class SelfEvolutionSystem:
         {source_code[:10000]}
         """
         
-        response_text = self.aybar.ask_llm(prompt, model_name=self.config.ENGINEER_MODEL_NAME, max_tokens=2048, temperature=0.4)
+        response_text = self.aybar.ask_llm(prompt, model_name=APP_CONFIG["llm"]["ENGINEER_MODEL_NAME"], max_tokens=2048, temperature=0.4)
         
         try:
             # DÜZELTME: LLM'in ```json ... ``` bloğu içine yazdığı JSON'ı bulur.
@@ -793,14 +1024,14 @@ class SelfEvolutionSystem:
                 # YENİ EKLENDİ: Başarısızlık sayacını artır ve evrim oranını düşür
                 self.consecutive_evolution_failures += 1
                 if self.consecutive_evolution_failures >= 3:
-                    self.config.PROACTIVE_EVOLUTION_RATE /= 2
-                    print(f"⚠️ Art arda 3 evrim hatası. Evrim oranı düşürüldü: {self.config.PROACTIVE_EVOLUTION_RATE:.2%}")
+                    APP_CONFIG["general"]["PROACTIVE_EVOLUTION_RATE"] /= 2
+                    print(f"⚠️ Art arda 3 evrim hatası. Evrim oranı düşürüldü: {APP_CONFIG['general']['PROACTIVE_EVOLUTION_RATE']:.2%}")
             else:
                 print("TEST BAŞARILI: Değişiklikler kalıcı hale getiriliyor.")
                 
                 # YENİ EKLENDİ: Başarı durumunda sayacı sıfırla ve oranı yavaşça artır
                 self.consecutive_evolution_failures = 0
-                self.config.PROACTIVE_EVOLUTION_RATE = min(0.02, self.config.PROACTIVE_EVOLUTION_RATE * 1.2) # %2'yi geçmesin
+                APP_CONFIG["general"]["PROACTIVE_EVOLUTION_RATE"] = min(0.02, APP_CONFIG["general"]["PROACTIVE_EVOLUTION_RATE"] * 1.2) # %2'yi geçmesin
 
                 self.aybar.memory_system.add_memory("semantic", {"turn": self.aybar.current_turn, "insight": f"Başarılı bir evrim adımı için yeni kod oluşturdum: {change_instruction.get('thought')}"})
                 print(f"GUARDIAN_REQUEST: EVOLVE_TO {temp_file_path}")
@@ -872,7 +1103,7 @@ class SelfEvolutionSystem:
         """
         Bellekten son etkileşimleri alır ve LLM'e problem tanımı üretmesi için gönderir.
         """
-        recent_memories = self.aybar.memory_system.get_recent_memories(n=10, memory_type="semantic")
+        recent_memories = self.aybar.memory_system.get_memory(layer="semantic", num_records=10)
     
         if not recent_memories:
             print("🧩 Bellekten anlamlı yansıma verisi alınamadı.")
@@ -891,7 +1122,7 @@ class SelfEvolutionSystem:
     
         response_text = self.aybar.ask_llm(
             prompt,
-            model_name=self.config.ENGINEER_MODEL_NAME,
+            model_name=APP_CONFIG["llm"]["ENGINEER_MODEL_NAME"],
             max_tokens=2048,
             temperature=0.3
         )
@@ -918,8 +1149,7 @@ class ClassMethodAdder(ast.NodeTransformer):
 
 class NeurochemicalSystem:
     """Nörokimyasal sistemi yönetir."""
-    def __init__(self, config: Config):
-        self.config = config
+    def __init__(self):
         self.neurochemicals = {
             "dopamine": 0.5, "serotonin": 0.5, "oxytocin": 0.5,
             "cortisol": 0.5, "glutamate": 0.5, "GABA": 0.5
@@ -931,81 +1161,77 @@ class NeurochemicalSystem:
         """
         # Dopamin: Ödül, motivasyon, yeni deneyimler
         delta_dopamine = 0
-        if emotional_state.get("curiosity", 0) > self.config.CURIOSITY_THRESHOLD:
-            delta_dopamine += self.config.DOPAMINE_CURIOSITY_BOOST
-        if emotional_state.get("satisfaction", 0) > self.config.SATISFACTION_BOOST:
-            delta_dopamine += self.config.DOPAMINE_SATISFACTION_BOOST
+        if emotional_state.get("curiosity", 0) > APP_CONFIG["emotional_constants"]["CURIOSITY_THRESHOLD"]:
+            delta_dopamine += APP_CONFIG["neurochemical_constants"]["DOPAMINE_CURIOSITY_BOOST"]
+        if emotional_state.get("satisfaction", 0) > APP_CONFIG["emotional_constants"]["SATISFACTION_THRESHOLD"]:
+            delta_dopamine += APP_CONFIG["neurochemical_constants"]["DOPAMINE_SATISFACTION_BOOST"] # Corrected: Was emotional_constants.SATISFACTION_BOOST
         if experience_type == "learning":
-            delta_dopamine += self.config.DOPAMINE_LEARNING_BOOST
-        delta_dopamine += (0.5 - self.neurochemicals["dopamine"]) * self.config.DOPAMINE_HOME_RATE
-        delta_dopamine = max(-self.config.CHEMICAL_CHANGE_LIMIT, min(self.config.CHEMICAL_CHANGE_LIMIT, delta_dopamine))
-        self.neurochemicals["dopamine"] = max(self.config.CHEMICAL_MIN_VALUE, min(self.config.CHEMICAL_MAX_VALUE, self.neurochemicals["dopamine"] + delta_dopamine))
-
+            delta_dopamine += APP_CONFIG["neurochemical_constants"]["DOPAMINE_LEARNING_BOOST"]
+        delta_dopamine += (0.5 - self.neurochemicals["dopamine"]) * APP_CONFIG["neurochemical_constants"]["DOPAMINE_HOME_RATE"]
+        delta_dopamine = max(-APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], delta_dopamine))
+        self.neurochemicals["dopamine"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MAX_VALUE"], self.neurochemicals["dopamine"] + delta_dopamine))
 
         # Serotonin: Ruh hali, denge, sakinlik
         delta_serotonin = 0
-        if emotional_state.get("satisfaction", 0) > self.config.SATISFACTION_BOOST:
-            delta_serotonin += self.config.SEROTONIN_SATISFACTION_BOOST
-        if emotional_state.get("mental_fatigue", 0) > self.config.FATIGUE_THRESHOLD:
-            delta_serotonin -= self.config.SEROTONIN_FATIGUE_DROP
-        delta_serotonin += (0.5 - self.neurochemicals["serotonin"]) * self.config.SEROTONIN_HOME_RATE
-        delta_serotonin = max(-self.config.CHEMICAL_CHANGE_LIMIT, min(self.config.CHEMICAL_CHANGE_LIMIT, delta_serotonin))
-        self.neurochemicals["serotonin"] = max(self.config.CHEMICAL_MIN_VALUE, min(self.config.CHEMICAL_MAX_VALUE, self.neurochemicals["serotonin"] + delta_serotonin))
-
+        if emotional_state.get("satisfaction", 0) > APP_CONFIG["emotional_constants"]["SATISFACTION_THRESHOLD"]:
+            delta_serotonin += APP_CONFIG["neurochemical_constants"]["SEROTONIN_SATISFACTION_BOOST"] # Corrected: Was emotional_constants.SATISFACTION_BOOST
+        if emotional_state.get("mental_fatigue", 0) > APP_CONFIG["emotional_constants"]["FATIGUE_THRESHOLD"]:
+            delta_serotonin -= APP_CONFIG["neurochemical_constants"]["SEROTONIN_FATIGUE_DROP"]
+        delta_serotonin += (0.5 - self.neurochemicals["serotonin"]) * APP_CONFIG["neurochemical_constants"]["SEROTONIN_HOME_RATE"]
+        delta_serotonin = max(-APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], delta_serotonin))
+        self.neurochemicals["serotonin"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MAX_VALUE"], self.neurochemicals["serotonin"] + delta_serotonin))
 
         # Oksitosin: Bağlanma, sosyal etkileşim (şimdilik pasif)
         delta_oxytocin = 0
         if experience_type == "social_interaction":
-             delta_oxytocin += self.config.OXYTOCIN_SOCIAL_BOOST
-        delta_oxytocin += (0.5 - self.neurochemicals["oxytocin"]) * self.config.OXYTOCIN_HOME_RATE
-        delta_oxytocin = max(-self.config.CHEMICAL_CHANGE_LIMIT, min(self.config.CHEMICAL_CHANGE_LIMIT, delta_oxytocin))
-        self.neurochemicals["oxytocin"] = max(self.config.CHEMICAL_MIN_VALUE, min(self.config.CHEMICAL_MAX_VALUE, self.neurochemicals["oxytocin"] + delta_oxytocin))
-
+             delta_oxytocin += APP_CONFIG["neurochemical_constants"]["OXYTOCIN_SOCIAL_BOOST"]
+        delta_oxytocin += (0.5 - self.neurochemicals["oxytocin"]) * APP_CONFIG["neurochemical_constants"]["OXYTOCIN_HOME_RATE"]
+        delta_oxytocin = max(-APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], delta_oxytocin))
+        self.neurochemicals["oxytocin"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MAX_VALUE"], self.neurochemicals["oxytocin"] + delta_oxytocin))
 
         # Kortizol: Stres, kaygı
         delta_cortisol = 0
-        if emotional_state.get('existential_anxiety', 0) > self.config.ANXIETY_THRESHOLD:
-            delta_cortisol += self.config.CORTISOL_ANXIETY_BOOST
-        if emotional_state.get("mental_fatigue", 0) > self.config.FATIGUE_THRESHOLD:
-            delta_cortisol += self.config.CORTISOL_FATIGUE_BOOST
-        delta_cortisol += (0.5 - self.neurochemicals["cortisol"]) * self.config.CORTISOL_HOME_RATE
-        delta_cortisol = max(-self.config.CHEMICAL_CHANGE_LIMIT, min(self.config.CHEMICAL_CHANGE_LIMIT, delta_cortisol))
-        self.neurochemicals["cortisol"] = max(self.config.CHEMICAL_MIN_VALUE, min(self.config.CHEMICAL_MAX_VALUE, self.neurochemicals["cortisol"] + delta_cortisol))
-
+        if emotional_state.get('existential_anxiety', 0) > APP_CONFIG["emotional_constants"]["ANXIETY_THRESHOLD"]:
+            delta_cortisol += APP_CONFIG["neurochemical_constants"]["CORTISOL_ANXIETY_BOOST"]
+        if emotional_state.get("mental_fatigue", 0) > APP_CONFIG["emotional_constants"]["FATIGUE_THRESHOLD"]:
+            delta_cortisol += APP_CONFIG["neurochemical_constants"]["CORTISOL_FATIGUE_BOOST"]
+        delta_cortisol += (0.5 - self.neurochemicals["cortisol"]) * APP_CONFIG["neurochemical_constants"]["CORTISOL_HOME_RATE"]
+        delta_cortisol = max(-APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], delta_cortisol))
+        self.neurochemicals["cortisol"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MAX_VALUE"], self.neurochemicals["cortisol"] + delta_cortisol))
 
         # Glutamat: Bilişsel aktivite, öğrenme
         delta_glutamate = 0
         if experience_type == "insight":
-            delta_glutamate += self.config.GLUTAMATE_COGNITIVE_BOOST
-        if emotional_state.get('existential_anxiety', 0) > self.config.ANXIETY_THRESHOLD:
-            delta_glutamate += self.config.GLUTAMATE_ANXIETY_BOOST
-        delta_glutamate += (0.5 - self.neurochemicals["glutamate"]) * self.config.GLUTAMATE_HOME_RATE
-        delta_glutamate = max(-self.config.CHEMICAL_CHANGE_LIMIT, min(self.config.CHEMICAL_CHANGE_LIMIT, delta_glutamate))
-        self.neurochemicals["glutamate"] = max(self.config.CHEMICAL_MIN_VALUE, min(self.config.CHEMICAL_MAX_VALUE, self.neurochemicals["glutamate"] + delta_glutamate))
-
+            delta_glutamate += APP_CONFIG["neurochemical_constants"]["GLUTAMATE_COGNITIVE_BOOST"]
+        if emotional_state.get('existential_anxiety', 0) > APP_CONFIG["emotional_constants"]["ANXIETY_THRESHOLD"]:
+            delta_glutamate += APP_CONFIG["neurochemical_constants"]["GLUTAMATE_ANXIETY_BOOST"]
+        delta_glutamate += (0.5 - self.neurochemicals["glutamate"]) * APP_CONFIG["neurochemical_constants"]["GLUTAMATE_HOME_RATE"]
+        delta_glutamate = max(-APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], delta_glutamate))
+        self.neurochemicals["glutamate"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MAX_VALUE"], self.neurochemicals["glutamate"] + delta_glutamate))
 
         # GABA: Sakinleştirici, inhibisyon
         delta_GABA = 0
-        if experience_type == "rest" or emotional_state.get("satisfaction", 0) > self.config.SATISFACTION_BOOST:
-            delta_GABA += self.config.GABA_COGNITIVE_REDUCTION
-        if emotional_state.get('existential_anxiety', 0) > self.config.ANXIETY_THRESHOLD:
-            delta_GABA -= self.config.GABA_ANXIETY_DROP
-        delta_GABA += (0.5 - self.neurochemicals["GABA"]) * self.config.GABA_HOME_RATE
-        delta_GABA = max(-self.config.CHEMICAL_CHANGE_LIMIT, min(self.config.CHEMICAL_CHANGE_LIMIT, delta_GABA))
-        self.neurochemicals["GABA"] = max(self.config.CHEMICAL_MIN_VALUE, min(self.config.CHEMICAL_MAX_VALUE, self.neurochemicals["GABA"] + delta_GABA))
+        # For GABA, the logic seems to be if satisfaction is above a threshold, then apply reduction.
+        # So using SATISFACTION_THRESHOLD here is appropriate.
+        if experience_type == "rest" or emotional_state.get("satisfaction", 0) > APP_CONFIG["emotional_constants"]["SATISFACTION_THRESHOLD"]:
+            delta_GABA += APP_CONFIG["neurochemical_constants"]["GABA_COGNITIVE_REDUCTION"]
+        if emotional_state.get('existential_anxiety', 0) > APP_CONFIG["emotional_constants"]["ANXIETY_THRESHOLD"]:
+            delta_GABA -= APP_CONFIG["neurochemical_constants"]["GABA_ANXIETY_DROP"]
+        delta_GABA += (0.5 - self.neurochemicals["GABA"]) * APP_CONFIG["neurochemical_constants"]["GABA_HOME_RATE"]
+        delta_GABA = max(-APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_CHANGE_LIMIT"], delta_GABA))
+        self.neurochemicals["GABA"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], min(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MAX_VALUE"], self.neurochemicals["GABA"] + delta_GABA))
 
         # Nörokimyasalların birbirini etkilemesi (basit çapraz etki örneği)
-        self.neurochemicals["serotonin"] = max(self.config.CHEMICAL_MIN_VALUE, self.neurochemicals["serotonin"] - self.neurochemicals["dopamine"] * 0.01)
-        self.neurochemicals["GABA"] = max(self.config.CHEMICAL_MIN_VALUE, self.neurochemicals["GABA"] + self.neurochemicals["serotonin"] * 0.02)
-        self.neurochemicals["dopamine"] = max(self.config.CHEMICAL_MIN_VALUE, self.neurochemicals["dopamine"] - emotional_state.get("existential_anxiety", 0) * 0.005)
+        self.neurochemicals["serotonin"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], self.neurochemicals["serotonin"] - self.neurochemicals["dopamine"] * 0.01)
+        self.neurochemicals["GABA"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], self.neurochemicals["GABA"] + self.neurochemicals["serotonin"] * 0.02)
+        self.neurochemicals["dopamine"] = max(APP_CONFIG["neurochemical_constants"]["CHEMICAL_MIN_VALUE"], self.neurochemicals["dopamine"] - emotional_state.get("existential_anxiety", 0) * 0.005)
 
 # EmbodiedSelf sınıfının tamamını bununla değiştirin
 
 class EmbodiedSelf:
     """Bedenlenmiş benliği simüle eder."""
-    def __init__(self, main_config: Config, embodiment_config: Dict):
-        self.main_config = main_config
-        self.embodiment_config = embodiment_config
+    def __init__(self, embodiment_config: Dict): # Removed main_config
+        self.embodiment_config = embodiment_config # Directly use the passed dict
         self.location = "Bilinmeyen Bir Alan"
         self.posture = "Sakin"
         self.sensory_acuity = {"visual": 0.7, "auditory": 0.9, "tactile": 0.5}
@@ -1034,9 +1260,9 @@ class EmbodiedSelf:
             self.posture = "Sakin"
         
         for region in self.sensory_acuity:
-            self.sensory_acuity[region] = np.clip(self.sensory_acuity[region] - self.main_config.SENSORY_ACTIVITY_DECAY, 0.0, 1.0)
-            if emotional_state.get("curiosity", 0) > self.main_config.CURIOSITY_THRESHOLD:
-                self.sensory_acuity[region] = np.clip(self.sensory_acuity[region] + self.main_config.SENSORY_ACUITY_BOOST, 0.0, 1.0)
+            self.sensory_acuity[region] = np.clip(self.sensory_acuity[region] - APP_CONFIG["embodiment_constants"]["SENSORY_ACTIVITY_DECAY"], 0.0, 1.0)
+            if emotional_state.get("curiosity", 0) > APP_CONFIG["emotional_constants"]["CURIOSITY_THRESHOLD"]:
+                self.sensory_acuity[region] = np.clip(self.sensory_acuity[region] + APP_CONFIG["embodiment_constants"]["SENSORY_ACUITY_BOOST"], 0.0, 1.0)
 
     # EKLENDİ: Bu metot, EmotionalSystem'in düzgün çalışması için gereklidir.
     def neural_activation_pattern(self, emotion: str, intensity: float) -> List[float]:
@@ -1104,7 +1330,7 @@ class ComputerControlSystem:
         # DEĞİŞTİRİLDİ: Artık Config'den gelen VISION_MODEL_NAME ile doğru modeli çağırıyoruz.
         vision_response = self.aybar.ask_llm(
             vision_prompt, 
-            model_name=self.aybar.config.VISION_MODEL_NAME,
+            model_name=APP_CONFIG["llm"]["VISION_MODEL_NAME"],
             max_tokens=512 # Görsel analiz cevapları genellikle daha kısadır
         )
         
@@ -1133,8 +1359,7 @@ class ComputerControlSystem:
 # --- 2. Geliştirilmiş Bellek Sistemleri ---
 class EmotionalSystem:
     """Duygusal durum ve etkileşimleri yönetir. Artık LLM hatasına karşı fallback mekanizması içeriyor."""
-    def __init__(self, config: Config, emotion_engine: EmotionEngine):
-        self.config = config
+    def __init__(self, emotion_engine: EmotionEngine):
         self.emotion_engine = emotion_engine
         self.emotional_state = {
             "curiosity": 5.0, "confusion": 2.0, "satisfaction": 5.0,
@@ -1175,7 +1400,7 @@ class EmotionalSystem:
         # Diğer duyguları zamanla körelt
         for emotion in self.emotional_state:
             if emotion != 'loneliness': # Yalnızlık kendi mantığıyla değiştiği için hariç tutulur
-                decay = self.config.EMOTION_DECAY_RATE
+                decay = APP_CONFIG["emotional_constants"]["EMOTION_DECAY_RATE"]
                 self.emotional_state[emotion] = max(self.emotional_state[emotion] * (1 - decay), 0.0)
 
 
@@ -1188,8 +1413,8 @@ class EmotionalSystem:
             if emotion in self.emotional_state:
                 self.emotional_state[emotion] = np.clip(
                     self.emotional_state[emotion] + change, 
-                    self.config.EMOTION_MIN_VALUE, 
-                    self.config.EMOTION_MAX_VALUE
+                    APP_CONFIG["emotional_constants"]["EMOTION_MIN_VALUE"],
+                    APP_CONFIG["emotional_constants"]["EMOTION_MAX_VALUE"]
                 )
         
         change_rate = {e: self.emotional_state[e] - prev_state.get(e,0) for e in self.emotional_state}
@@ -1224,8 +1449,7 @@ class EmotionalSystem:
 # CognitiveSystem sınıfının tamamını bununla değiştirin
 class CognitiveSystem:
     """Bilişsel süreçleri, hedefleri ve kalıcı sosyal ilişkileri yönetir."""
-    def __init__(self, config: Config, memory_system: MemorySystem): # DEĞİŞTİRİLDİ
-        self.config = config
+    def __init__(self, memory_system: MemorySystem): # DEĞİŞTİRİLDİ config removed
         self.memory_system = memory_system # DEĞİŞTİRİLDİ
         self.consciousness_level = 0.0
         self.meta_cognitive_state = {
@@ -1234,11 +1458,13 @@ class CognitiveSystem:
             "focus_level": 0.5, "curiosity_drive": 0.5,
             "problem_solving_mode": 0.0, "internal_coherence": 0.5
         }
-        self.current_goal = None
-        self.goal_steps = []
-        self.goal_progress = 0
-        self.goal_duration = 0
-        self.goal_start_turn = 0
+        # Yeni hedef yapısı
+        self.main_goal: Optional[str] = None
+        self.sub_goals: List[str] = []
+        self.current_sub_goal_index: int = -1 # Aktif alt hedef yoksa -1
+
+        self.goal_duration = 0 # Ana hedefin toplam süresi
+        self.goal_start_turn = 0 # Ana hedefin başladığı tur
         
         self.social_relations = {} 
         self._load_social_relations() # YENİ: İlişkileri veritabanından yükle
@@ -1273,16 +1499,36 @@ class CognitiveSystem:
             self.memory_system.cursor.execute(sql, (user_id, data_json))
             self.memory_system.conn.commit()
 
+    def set_new_goal(self, goal_input: Union[str, Dict], duration: int, current_turn: int):
+        """Yeni bir ana hedef ve isteğe bağlı alt hedefler belirler."""
+        self.sub_goals = []
+        self.current_sub_goal_index = -1
 
-    # YENİ METOT: Yeni bir hedef belirler
-    def set_new_goal(self, goal: str, steps: List[str], duration: int, current_turn: int):
-        """Yeni bir uzun vadeli hedef ve adımlarını belirler."""
-        self.current_goal = goal
-        self.goal_steps = steps
-        self.goal_duration = duration
-        self.goal_progress = 0
+        if isinstance(goal_input, str):
+            self.main_goal = goal_input
+            print(f"🎯 Yeni Ana Hedef Belirlendi: '{self.main_goal}'. {duration} tur sürecek.")
+        elif isinstance(goal_input, dict):
+            self.main_goal = goal_input.get("goal")
+            self.sub_goals = goal_input.get("sub_goals", [])
+            if not self.main_goal and self.sub_goals: # Eğer sadece alt hedefler varsa, ilkini ana hedef yap
+                 self.main_goal = self.sub_goals.pop(0)
+
+            if self.sub_goals:
+                self.current_sub_goal_index = 0
+                print(f"🎯 Yeni Ana Hedef: '{self.main_goal}' ({duration} tur). Alt Hedefler: {self.sub_goals}")
+            elif self.main_goal:
+                print(f"🎯 Yeni Ana Hedef Belirlendi (Alt hedefsiz): '{self.main_goal}'. {duration} tur sürecek.")
+            else:
+                print("⚠️ Geçersiz hedef girişi. Ne ana hedef ne de alt hedef belirtildi.")
+                self.main_goal = None # Hatalı girişte hedefi sıfırla
+                return
+        else:
+            print(f"⚠️ Geçersiz hedef formatı: {type(goal_input)}. String veya Dict bekleniyordu.")
+            self.main_goal = None # Hatalı girişte hedefi sıfırla
+            return
+
         self.goal_start_turn = current_turn
-        print(f"🎯 Yeni Hedef Belirlendi: '{goal}'. {duration} tur sürecek.")
+        self.goal_duration = duration
 
     def get_or_create_social_relation(self, user_id: str) -> Dict:
         """İlişki profilini getirir, yoksa oluşturur ve veritabanına kaydeder."""
@@ -1302,33 +1548,45 @@ class CognitiveSystem:
             self._save_social_relation(user_id) # YENİ: Güncellenen ilişkiyi kaydet
             print(f"🤝 {user_id} ile ilişki güncellendi: Güven={relation['trust']:.2f}, Aşinalık={relation['familiarity']:.2f}")
 
+    def clear_all_goals(self):
+        """Tüm ana ve alt hedefleri temizler."""
+        self.main_goal = None
+        self.sub_goals = []
+        self.current_sub_goal_index = -1
+        self.goal_duration = 0
+        self.goal_start_turn = 0
+        print("🗑️ Tüm hedefler temizlendi.")
 
-
-    # YENİ METOT: Mevcut görevi döndürür veya hedefi bitirir
     def get_current_task(self, current_turn: int) -> Optional[str]:
-        """Aktif bir hedef varsa, sıradaki adımı döndürür. Hedef bittiyse temizler."""
-        if not self.current_goal:
+        """Aktif görevi (alt hedef veya ana hedef) döndürür. Süresi dolmuşsa hedefleri temizler."""
+        if not self.main_goal: # Hiç ana hedef yoksa
             return None
 
-        # Hedef süresi doldu mu?
-        if current_turn > self.goal_start_turn + self.goal_duration:
-            print(f"🏁 Hedef Tamamlandı: '{self.current_goal}'")
-            self.current_goal = None
-            self.goal_steps = []
+        # Ana hedefin süresi doldu mu?
+        if self.goal_duration > 0 and current_turn > self.goal_start_turn + self.goal_duration:
+            print(f"⌛ Ana hedef ('{self.main_goal}') süresi doldu. Hedefler temizleniyor.")
+            self.clear_all_goals()
             return None
 
-        # Plândaki tüm adımlar bitti mi?
-        if self.goal_progress >= len(self.goal_steps):
-            print(f"🏁 Hedefin tüm adımları tamamlandı: '{self.current_goal}'")
-            self.current_goal = None
-            self.goal_steps = []
-            return None
-            
-        # Sıradaki adımı al ve ilerlemeyi kaydet
-        task = self.goal_steps[self.goal_progress]
-        self.goal_progress += 1
-        print(f"🎯 Görev Adımı ({self.goal_progress}/{len(self.goal_steps)}): {task}")
-        return task
+        # Aktif bir alt hedef var mı?
+        if self.sub_goals and 0 <= self.current_sub_goal_index < len(self.sub_goals):
+            task = self.sub_goals[self.current_sub_goal_index]
+            print(f"🎯 Aktif Alt Görev ({self.current_sub_goal_index + 1}/{len(self.sub_goals)}): {task} (Ana Hedef: {self.main_goal})")
+            return task
+
+        # Alt hedefler bittiyse veya hiç yoksa, ana hedefi döndür
+        # (Ana hedef de tamamlanmışsa veya hiç yoksa, bu durum yukarıda handle edilir veya main_goal None olur)
+        if self.main_goal:
+             # Eğer alt hedefler vardı ve hepsi bittiyse (index sınır dışına çıktıysa) ana hedef de tamamlanmış sayılır.
+            if self.sub_goals and self.current_sub_goal_index >= len(self.sub_goals):
+                print(f"🏁 Tüm alt hedefler tamamlandı. Ana hedef ('{self.main_goal}') de tamamlanmış sayılıyor.")
+                self.clear_all_goals()
+                return None
+
+            print(f"🎯 Aktif Ana Görev: {self.main_goal}")
+            return self.main_goal
+
+        return None # Hiçbir görev yok
 
     def _execute_reflection(self, aybar, last_response: str):
         """Öz-yansıma sürecini başlatır."""
@@ -1352,7 +1610,7 @@ class CognitiveSystem:
         
         self.update_consciousness("reflection", intensity=0.5)
         self.adjust_meta_cognition({
-            "self_awareness_level": self.config.SELF_AWARENESS_BOOST
+            "self_awareness_level": APP_CONFIG["meta_cognitive_constants"]["SELF_AWARENESS_BOOST"]
         })
         
         print(f"💡 Bir sonraki tur için yansıtıcı soru: {reflection_question}")
@@ -1360,13 +1618,13 @@ class CognitiveSystem:
     def update_consciousness(self, event_type: str, intensity: float = 1.0):
         """Bilinç seviyesini olaylara göre günceller."""
         boosts = {
-            "user_interaction": self.config.CONSCIOUSNESS_BOOST_INTERACTION,
-            "insight": self.config.CONSCIOUSNESS_BOOST_INSIGHT,
-            "reflection": self.config.SELF_AWARENESS_BOOST,
+            "user_interaction": APP_CONFIG["consciousness_constants"]["CONSCIOUSNESS_BOOST_INTERACTION"],
+            "insight": APP_CONFIG["consciousness_constants"]["CONSCIOUSNESS_BOOST_INSIGHT"],
+            "reflection": APP_CONFIG["meta_cognitive_constants"]["SELF_AWARENESS_BOOST"],
             "crisis": -0.1,
             "learning": 0.05
         }
-        change = boosts.get(event_type, -self.config.CONSCIOUSNESS_DECAY) * intensity
+        change = boosts.get(event_type, -APP_CONFIG["consciousness_constants"]["CONSCIOUSNESS_DECAY"]) * intensity
         self.consciousness_level = np.clip(self.consciousness_level + change, 0.0, 1.0)
 
     def adjust_meta_cognition(self, changes: Dict):
@@ -1406,17 +1664,18 @@ class CognitiveSystem:
 class EnhancedAybar:
     # EnhancedAybar __init__ metodunu güncelleyin
     def __init__(self):
-        self.config = Config()
-        self.memory_system = MemorySystem(self.config)
-        self.neurochemical_system = NeurochemicalSystem(self.config)
+        # Config class is removed. APP_CONFIG is loaded globally.
+        # No self.config assignment needed here.
+        self.memory_system = MemorySystem()
+        self.neurochemical_system = NeurochemicalSystem()
         
-        self.emotion_engine = EmotionEngine(self.config, self)
-        self.emotional_system = EmotionalSystem(self.config, self.emotion_engine)
+        self.emotion_engine = EmotionEngine(self) # Pass self (aybar_instance)
+        self.emotional_system = EmotionalSystem(self.emotion_engine)
         
-        self.embodied_self = EmbodiedSelf(self.config, self.config.DEFAULT_EMBODIMENT_CONFIG)
-        self.cognitive_system = CognitiveSystem(self.config, self.memory_system)
+        self.embodied_self = EmbodiedSelf(APP_CONFIG["embodiment_constants"]["DEFAULT_EMBODIMENT_CONFIG"])
+        self.cognitive_system = CognitiveSystem(self.memory_system)
         self.evolution_system = SelfEvolutionSystem(self)
-        self.speaker_system = SpeakerSystem(self.config)
+        self.speaker_system = SpeakerSystem()
         self.computer_control_system = ComputerControlSystem(self)
         self.web_surfer_system = WebSurferSystem()
         
@@ -1427,18 +1686,183 @@ class EnhancedAybar:
         self.next_question_from_sleep = None
         self.next_question_from_crisis = None
         self.next_question_from_reflection = None
-        
-        self.ask_llm = lru_cache(maxsize=self.config.LLM_CACHE_SIZE)(self._ask_llm_uncached)
-        
+
+        self.is_waiting_for_human_captcha_help = False
+        self.last_web_url_before_captcha: Optional[str] = None
+
+        # Updated to reflect the new method name and its caching
+        self.ask_llm = lru_cache(maxsize=APP_CONFIG["llm"]["LLM_CACHE_SIZE"])(self._ask_llm_with_tools)
+
+        self.ethical_framework = EthicalFramework(self)
+
         self._check_for_guardian_logs()
         self.identity_prompt = self._load_identity()
+        self.tool_definitions_for_llm = self._prepare_tool_definitions() # Initialize tool definitions
+        logger.info(f"🛠️ Prepared {len(self.tool_definitions_for_llm)} tool definitions for the LLM.")
         print(f"🧬 Aybar Kimliği Yüklendi: {self.identity_prompt[:70]}...")
         print("🚀 Geliştirilmiş Aybar Başlatıldı")
+
+    def _prepare_tool_definitions(self) -> List[Dict[str, Any]]:
+        """
+        Dynamically generates tool definitions for the LLM using introspection.
+        """
+        tool_defs = []
+        # Define which functions from tools.py are exposed to the LLM
+        # For now, let's manually list them to control exposure.
+        # Later, this could be automated with decorators or naming conventions.
+        # Ensure these names match exactly the function names in tools.py
+        tool_function_names = [
+            "maps_or_search",
+            "ask_user_via_file",
+            "update_identity",
+            "finish_goal",
+            "summarize_and_reset",
+            "creative_generation",
+            "regulate_emotion",
+            "analyze_memory",
+            "run_internal_simulation",
+            "handle_interaction",
+            "perform_meta_reflection",
+            "keyboard_type",
+            "mouse_click",
+            "analyze_screen",
+            "web_click",
+            "web_type"
+        ]
+
+        for func_name in tool_function_names:
+            if hasattr(tools, func_name):
+                func = getattr(tools, func_name)
+                if not callable(func):
+                    continue
+
+                sig = inspect.signature(func)
+                docstring = inspect.getdoc(func) or "No description available."
+
+                # Extract a concise description from the beginning of the docstring
+                description_lines = [line.strip() for line in docstring.split('\n') if line.strip()]
+                concise_description = description_lines[0] if description_lines else "No description available."
+
+
+                parameters_schema = {"type": "object", "properties": {}, "required": []}
+
+                for name, param in sig.parameters.items():
+                    if name == "aybar_instance":  # Skip internal parameters
+                        continue
+
+                    param_type_hint = param.annotation
+                    param_type_str = "string" # Default type
+                    if param_type_hint == str:
+                        param_type_str = "string"
+                    elif param_type_hint == int:
+                        param_type_str = "integer"
+                    elif param_type_hint == bool:
+                        param_type_str = "boolean"
+                    elif param_type_hint == float:
+                        param_type_str = "number"
+                    elif param_type_hint == list or param_type_hint == List:
+                        param_type_str = "array"
+                    elif param_type_hint == dict or param_type_hint == Dict:
+                        param_type_str = "object"
+
+                    # Basic description from param name if not in docstring (very rudimentary)
+                    # A more robust way would be to parse docstrings for param descriptions.
+                    param_description = f"Parameter '{name}' of type {param_type_str}"
+
+                    parameters_schema["properties"][name] = {
+                        "type": param_type_str,
+                        "description": param_description
+                    }
+                    if param.default == inspect.Parameter.empty:
+                        parameters_schema["required"].append(name)
+
+                tool_defs.append({
+                    "type": "function",
+                    "function": {
+                        "name": func_name,
+                        "description": concise_description,
+                        "parameters": parameters_schema
+                    }
+                })
+            else:
+                logger.warning(f"Tool function '{func_name}' not found in tools.py module during definition preparation.")
+
+        logger.debug(f"Generated tool definitions for LLM: {json.dumps(tool_defs, indent=2)}")
+        return tool_defs
+
+    def _find_json_blob(self, text: str) -> Optional[str]:
+        """
+        Finds the first complete JSON array or object in the given text.
+        Prioritizes arrays over objects if both start at the same position (unlikely with pre-sanitized text).
+        Handles simple string literal escaping for brackets/braces.
+        """
+        if not text:
+            return None
+
+        # Helper to find a balanced structure (array or object)
+        def _find_balanced(text_to_search: str, open_char: str, close_char: str) -> Optional[str]:
+            first_char_idx = text_to_search.find(open_char)
+            if first_char_idx == -1:
+                return None
+
+            level = 0
+            in_string = False
+            escaped = False
+
+            for i in range(first_char_idx, len(text_to_search)):
+                char = text_to_search[i]
+
+                if in_string:
+                    if char == '"' and not escaped:
+                        in_string = False
+                    elif char == '\\' and not escaped:
+                        escaped = True
+                        continue
+                    escaped = False # Reset escape status after checking
+                    continue # Ignore other chars inside string for balancing
+
+                escaped = False # Reset escape status if not in string or after processing escape
+
+                if char == '"':
+                    in_string = True
+                elif char == open_char:
+                    level += 1
+                elif char == close_char:
+                    level -= 1
+                    if level == 0:
+                        # Found the end of the outermost structure starting from first_char_idx
+                        return text_to_search[first_char_idx : i + 1]
+            return None # Unbalanced structure
+
+        # Try to find array first
+        json_array_str = _find_balanced(text, '[', ']')
+        if json_array_str:
+            logger.debug(f"JSON blob finder: Found array: {json_array_str[:100]}...")
+            return json_array_str
+
+        # If no array, try to find object
+        json_object_str = _find_balanced(text, '{', '}')
+        if json_object_str:
+            logger.debug(f"JSON blob finder: Found object: {json_object_str[:100]}...")
+            return json_object_str
+
+        logger.debug("JSON blob finder: No valid JSON array or object found.")
+        return None
+
+    def _get_thought_text_from_action(self, thought_value: any) -> str:
+        raw_text = ""
+        if isinstance(thought_value, str):
+            raw_text = thought_value.strip()
+        elif isinstance(thought_value, dict):
+            raw_text = str(thought_value.get("text", "")).strip() # Ensure result is string and stripped
+
+        # Sanitize the extracted text before returning
+        return self._sanitize_llm_output(raw_text) if raw_text else "" # Default for None or other unexpected types
 
     def _load_identity(self, context_type: str = 'general') -> str:
         """Veritabanından aktif kimlik prompt'unu yükler."""
         try:
-            conn = sqlite3.connect(self.config.DB_FILE)
+            conn = sqlite3.connect(APP_CONFIG["general"]["DB_FILE"])
             cur = conn.cursor()
             cur.execute(
                 "SELECT content FROM identity_prompts WHERE context_type = ? AND active = 1 ORDER BY created_at DESC LIMIT 1",
@@ -1455,50 +1879,111 @@ class EnhancedAybar:
     def _parse_llm_json_plan(self, response_text: str) -> List[Dict]:
         """
         LLM'den gelen metni önce katı JSON, sonra esnek Python literali olarak parse etmeyi dener.
-    
+        Sanitize işlemini de burada yapar.
         """
         
         # YENİ EKLENDİ: Girdi boyutu kontrolü (Denial of Service saldırılarını önler)
         MAX_JSON_LEN = 30000 
-        if len(response_text) > MAX_JSON_LEN:
-            print(f"⚠️ JSON planı reddedildi: Girdi çok büyük ({len(response_text)} > {MAX_JSON_LEN}).")
-            return [{"action": "CONTINUE_INTERNAL_MONOLOGUE", "thought": "Ürettiğim plan çok uzundu, daha kısa ve net bir plan yapmalıyım."}]
+        if not isinstance(response_text, str) or len(response_text) > MAX_JSON_LEN:
+            print(f"⚠️ JSON planı reddedildi: Girdi çok büyük veya geçersiz tip ({len(response_text) if isinstance(response_text, str) else 'N/A'} > {MAX_JSON_LEN}).")
+            return [{"action": "CONTINUE_INTERNAL_MONOLOGUE", "thought": "Ürettiğim plan çok uzundu veya geçersizdi, daha kısa ve net bir plan yapmalıyım."}]
             
-            
-        
-        try:
-            # 1. Adım: ```json ... ``` gibi kod bloklarını temizle
-            json_match = re.search(r"```json\s*(.*?)\s*```", response_text, re.DOTALL)
-            if json_match:
-                clean_text = json_match.group(1)
-            else:
-                # Eğer kod bloğu yoksa, metnin başındaki ve sonundaki boşlukları ve olası listeleri ara
-                clean_text = response_text.strip()
-                if clean_text.startswith('[') and clean_text.endswith(']'):
-                    pass # Zaten liste formatında
-                else:
-                    # En geniş liste yapısını bulmaya çalış
-                    list_match = re.search(r'\[\s*(\{.*?\})\s*\]', clean_text, re.DOTALL)
-                    if list_match:
-                        clean_text = list_match.group(0)
-            
-            # 2. Adım: Katı JSON olarak parse etmeyi dene
-            action_plan = json.loads(clean_text)
-            print("👍 JSON planı başarıyla parse edildi (Strict Mode).")
-            return action_plan if isinstance(action_plan, list) else [action_plan]
+        # Önce LLM çıktısını genel olarak sanitize et (istenmeyen meta yorumlar vb.)
+        # Bu, JSON yapısını bozabilecek dışsal metinleri temizler.
+        # ÖNEMLİ: Ham LLM çıktısını ilk olarak burada genel olarak sanitize ediyoruz.
+        logger.debug(f"Raw LLM output for JSON parsing (first 200 chars): {response_text[:200]}...")
+        sanitized_text = self._sanitize_llm_output(response_text) # Görev tanımına göre eklendi
+        logger.debug(f"Sanitized LLM output for JSON parsing (first 200 chars): {sanitized_text[:200]}...")
 
-        except json.JSONDecodeError:
-            print("⚠️ Standart JSON parse edilemedi, Python literal denemesi yapılıyor...")
+        # Adım 1: En dıştaki JSON array veya object'i bulmaya çalışalım.
+        json_blob_candidate = self._find_json_blob(sanitized_text)
+
+        if not json_blob_candidate:
+            logger.warning("LLM'den geçerli bir JSON planı çıkarılamadı (blob bulunamadı).")
+            return [{"action": "CONTINUE_INTERNAL_MONOLOGUE",
+                     "thought": "LLM'den geçerli bir JSON planı çıkarılamadı (blob bulunamadı).",
+                     "content": "Düşüncelerimi topluyorum, bir sonraki adımımı planlayacağım."}]
+
+        # Adım 1.5: Eğer bulunan blob bir JSON object ise, onu bir listeye sarmala.
+        # Parser her zaman bir JSON array (eylem listesi) bekler.
+        if json_blob_candidate.startswith('{'):
+            final_json_str = f"[{json_blob_candidate}]"
+            logger.debug(f"JSON object found, wrapped into array: {final_json_str[:150]}...")
+        elif json_blob_candidate.startswith('['):
+            final_json_str = json_blob_candidate
+            logger.debug(f"JSON array found: {final_json_str[:150]}...")
+        else:
+            logger.error(f"_find_json_blob geçersiz bir şey döndürdü: {json_blob_candidate[:100]}")
+            return [{"action": "CONTINUE_INTERNAL_MONOLOGUE", "thought": "_find_json_blob'dan beklenmedik çıktı.", "content": "İçsel bir hatayla karşılaştım."}]
+
+
+        # Adım 2: String üzerinde yapısal JSON temizliği (trailing komutlar, eksik komutlar)
+        # ve KONTROL KARAKTERİ TEMİZLİĞİ (Plan Adım 2.3)
+        # Bu temizlikler artık `final_json_str` üzerinde yapılmalı.
+        processed_json_str = final_json_str
+        # Basit yapısal düzeltmeler
+        processed_json_str = re.sub(r',\s*\]', ']', processed_json_str) # Trailing comma before ]
+        processed_json_str = re.sub(r',\s*\}', '}', processed_json_str) # Trailing comma before }
+        processed_json_str = re.sub(r'\}\s*\{', '},{', processed_json_str) # Missing comma between } {
+
+        # Kapanmamış string sonlandırma denemeleri (dikkatli)
+        processed_json_str = re.sub(r'(":\s*"[^"]*?)\s*([,\}\]])', r'\1"\2', processed_json_str) # Missing quote before , } or ]
+        processed_json_str = re.sub(r'(":\s*"[^"]*?)$', r'\1"', processed_json_str) # Missing quote at EOL
+
+        # Kontrol karakterlerini temizle (ASCII C0 control characters (excluding tab, LF, CR) and DEL)
+        processed_json_str = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', processed_json_str)
+
+        logger.info(f"🔧 Yapısal ve kontrol karakteri temizliği sonrası JSON adayı: {processed_json_str[:200]}...")
+
+        keys_to_sanitize = [
+            "thought", "content", "question", "summary", "query",
+            "text", "command", "url", "filename", "code",
+            "scenario", "prompt", "name", "steps", "description",
+            "message", "user_input", "response_text", "page_content",
+            "error_message", "log_message", "goal", "sub_goal"
+        ]
+
+        try:
+            # Adım 3: Katı JSON olarak parse etmeyi dene
+            action_plan_list = json.loads(processed_json_str)
+
+            if not isinstance(action_plan_list, list):
+                 logger.warning(f"JSON.loads'tan sonra beklenen liste değil, dict geldi. Tekrar listeye sarılıyor. Gelen: {action_plan_list}")
+                 action_plan_list = [action_plan_list]
+
+            # Adım 4: Parse edilmiş JSON içindeki metin alanlarını sanitize et (Plan Adım 2.4 - Doğrulama)
+            for item in action_plan_list:
+                if isinstance(item, dict):
+                    for key, value in item.items():
+                        if isinstance(value, str) and key in keys_to_sanitize:
+                            item[key] = self._sanitize_llm_output(value)
+
+            logger.info("👍 JSON planı başarıyla parse edildi ve içerik sanitize edildi (Strict Mode).")
+            return action_plan_list
+
+        except json.JSONDecodeError as e_json:
+            logger.warning(f"⚠️ Standart JSON parse edilemedi (json.loads): {e_json}. Denenen metin: {processed_json_str[:200]}. Python literal denemesi yapılıyor...")
             try:
-                # 3. Adım: Başarısız olursa, Python'un kendi esnek literal ayrıştırıcısını dene
-                # Bu, tek tırnak, trailing comma gibi hataları tolere eder.
-                action_plan = ast.literal_eval(clean_text)
-                print("👍 JSON planı başarıyla parse edildi (Flexible Mode).")
-                return action_plan if isinstance(action_plan, list) else [action_plan]
-            except (ValueError, SyntaxError, MemoryError, TypeError) as e:
-                # Bu da başarısız olursa, planın bozuk olduğunu kabul et
-                print(f"❌ Esnek parse etme de başarısız oldu: {e}")
-                return [{"action": "CONTINUE_INTERNAL_MONOLOGUE", "thought": f"(Tamamen anlaşılmayan bir eylem planı ürettim, format bozuk: {response_text})", "content": f"(Tamamen anlaşılmayan bir eylem planı ürettim...)"}]
+                action_plan_list = ast.literal_eval(processed_json_str)
+                if not isinstance(action_plan_list, list):
+                     action_plan_list = [action_plan_list]
+
+                # Adım 4 (tekrar): Parse edilmiş JSON içindeki metin alanlarını sanitize et (Plan Adım 2.4 - Doğrulama)
+                for item in action_plan_list:
+                     if isinstance(item, dict):
+                        for key, value in item.items():
+                            if isinstance(value, str) and key in keys_to_sanitize: # Use the same keys_to_sanitize list
+                                item[key] = self._sanitize_llm_output(value)
+
+                logger.info("👍 JSON planı başarıyla parse edildi ve içerik sanitize edildi (Flexible Mode - ast.literal_eval).")
+                return action_plan_list
+            except (ValueError, SyntaxError, MemoryError, TypeError) as e_ast:
+                # Plan Adım 2.5: İyileştirilmiş Fallback Loglaması
+                fallback_thought = f"(JSON planı parse edilemedi. Ayrıştırma denenen son metin: {processed_json_str[:400]})"
+                logger.error(f"❌ Esnek parse etme (ast.literal_eval) de başarısız oldu: {e_ast}. {fallback_thought}")
+                return [{"action": "CONTINUE_INTERNAL_MONOLOGUE",
+                         "thought": fallback_thought,
+                         "content": "Düşüncelerimi topluyorum, bir sonraki adımımı planlayacağım."}]
 
     # YENİ METOT: EnhancedAybar sınıfına ekleyin
     def _check_for_guardian_logs(self):
@@ -1531,43 +2016,103 @@ class EnhancedAybar:
             # Log dosyasını tekrar işlememek için sil
             os.remove(log_file)
 
-    # === FUNCTION START ===
-    # _ask_llm_uncached metodunu bu yeni versiyonla değiştirin
-    def _ask_llm_uncached(self, prompt: str, model_name: Optional[str] = None, max_tokens: int = None, temperature: float = 0.4) -> str:
-        """LLM'ye sorgu gönderir ve hata durumunda hata mesajını döndürür."""
-        
-        # Temperature ayarını daha düşük bir değere çekerek modelin kararlılığını artırdık.
-        
+    # Renamed from _ask_llm_uncached and updated for tool support
+    def _ask_llm_with_tools(self, prompt: str, model_name: Optional[str] = None,
+                            max_tokens: int = None, temperature: float = 0.4,
+                            tools_definitions: Optional[List[Dict]] = None) -> Union[str, List[Dict[str, Any]]]:
+        """
+        Sends a query to the LLM, potentially with tool definitions, and processes the response.
+        Can return either a text string or a list of tool call dictionaries.
+        """
         payload = {
-            "prompt": prompt, 
-            "max_tokens": max_tokens or self.config.MAX_TOKENS, 
-            "temperature": temperature
+            "prompt": prompt,
+            "max_tokens": max_tokens or APP_CONFIG["llm"]["MAX_TOKENS"],
+            "temperature": temperature,
+            # "stream": False # Assuming non-streaming for now for tool calls
         }
-        
-        # Sadece özel bir model (Mühendis Beyin gibi) istendiğinde model parametresini ekle.
-        # Bu, varsayılan model çağrılarında 400 hatası alma riskini azaltır.
         if model_name:
             payload["model"] = model_name
 
+        if tools_definitions and isinstance(tools_definitions, list) and len(tools_definitions) > 0:
+            payload["tools"] = tools_definitions
+            payload["tool_choice"] = "auto" # Common default, might need API-specific value
+            logger.info(f"LLM call includes tools: {[tool.get('function', {}).get('name') for tool in tools_definitions]}")
+
         try:
+            logger.debug(f"LLM API Request Payload: {json.dumps(payload, indent=2)}")
             response = requests.post(
-                self.config.LLM_API_URL,
+                APP_CONFIG["llm"]["LLM_API_URL"],
                 headers={"Content-Type": "application/json"},
                 json=payload,
-                timeout=self.config.TIMEOUT
+                timeout=APP_CONFIG["llm"]["TIMEOUT"]
             )
             response.raise_for_status()
             json_response = response.json()
+            logger.debug(f"LLM API Raw Response: {json.dumps(json_response, indent=2)}")
+
             choices = json_response.get('choices')
             if choices and isinstance(choices, list) and len(choices) > 0:
-                text = choices[0].get('text')
-                if text is not None: return text.strip()
-            return f"⚠️ LLM Format Hatası: {str(json_response)[:200]}"
-        except requests.exceptions.RequestException as e:
-            return f"⚠️ LLM Bağlantı Hatası: {e}"
-        except Exception as e:
-            return f"⚠️ LLM Genel Hatası: {type(e).__name__} - {e}"
-    # === FUNCTION END ===
+                choice = choices[0]
+                message = choice.get('message') # OpenAI-like structure
+
+                if message and isinstance(message, dict):
+                    # Check for tool calls (OpenAI-like)
+                    tool_calls_data = message.get('tool_calls')
+                    if tool_calls_data and isinstance(tool_calls_data, list):
+                        processed_tool_calls = []
+                        for call_data in tool_calls_data:
+                            if call_data.get('type') == 'function': # Assuming 'function' type for tools
+                                function_info = call_data.get('function')
+                                if function_info and isinstance(function_info, dict):
+                                    name = function_info.get('name')
+                                    arguments_str = function_info.get('arguments')
+                                    call_id = call_data.get("id") # Get the tool_call_id
+                                    if name and arguments_str and call_id:
+                                        try:
+                                            arguments_dict = json.loads(arguments_str)
+                                            processed_tool_calls.append({
+                                                "id": call_id,
+                                                "name": name,
+                                                "arguments": arguments_dict
+                                            })
+                                        except json.JSONDecodeError as e:
+                                            logger.error(f"Failed to parse tool arguments for '{name}' (ID: {call_id}): {e}. Arguments: {arguments_str}")
+                                            # Return an error string or a special structure indicating this failure
+                                            return f"⚠️ LLM Tool Argument JSONDecodeError: {e} in arguments for tool {name} (ID: {call_id}). Arguments: {arguments_str}"
+                                    else:
+                                        logger.warning(f"Incomplete tool call data received: Name={name}, HasArgs={arguments_str is not None}, ID={call_id}")
+                        if processed_tool_calls:
+                            logger.info(f"LLM requested tool calls: {processed_tool_calls}")
+                            return processed_tool_calls # Return list of processed tool calls
+
+                    # If no tool_calls, or they were not processed, try to get content (text response)
+                    content = message.get('content')
+                    if content is not None:
+                        logger.info("LLM returned text content.")
+                        return str(content).strip()
+
+                # Fallback for non-OpenAI-like structures that might have 'text' directly in choice
+                text_content = choice.get('text')
+                if text_content is not None:
+                    logger.info("LLM returned direct text content in choice['text'].")
+                    return str(text_content).strip()
+
+            # If the structure is completely unexpected but was a valid JSON response from server
+            logger.warning(f"LLM response format not fully recognized. Full response: {str(json_response)[:500]}")
+            return f"⚠️ LLM Format Hatası: Yanıtta 'choices', 'message', 'content' veya 'text' anahtarları beklenen yapıda bulunamadı: {str(json_response)[:200]}"
+
+        except requests.exceptions.Timeout as e_timeout:
+            logger.error(f"LLM API isteği zaman aşımına uğradı: {e_timeout}")
+            return f"⚠️ LLM Bağlantı Hatası: Zaman aşımı ({e_timeout})"
+        except requests.exceptions.RequestException as e_req:
+            logger.error(f"LLM API isteği sırasında hata: {e_req}")
+            return f"⚠️ LLM Bağlantı Hatası: {e_req}"
+        except json.JSONDecodeError as e_json: # Error decoding the LLM's response
+            logger.error(f"LLM API'den gelen yanıt JSON formatında değil: {e_json}. Yanıt metni (ilk 500 char): {response.text[:500] if response else 'Yanıt yok'}")
+            return f"⚠️ LLM Yanıt Format Hatası: JSON parse edilemedi. Yanıt: {response.text[:200] if response else 'Yanıt yok'}"
+        except Exception as e_gen:
+            logger.error(f"LLM çağrısı sırasında genel bir hata oluştu: {e_gen}", exc_info=True)
+            return f"⚠️ LLM Genel Hatası: {type(e_gen).__name__} - {e_gen}"
 
     # YENİ METOT: EnhancedAybar sınıfına ekleyin
     def _update_identity(self) -> str:
@@ -1677,50 +2222,50 @@ class EnhancedAybar:
 
 
     # EnhancedAybar sınıfındaki bu metodu tamamen değiştirin
-    def _perform_internet_search(self, query: str) -> str:
-        """
-        Belirtilen sorgu için DuckDuckGo kullanarak internette arama yapar ve sonuçları özetler.
-        """
-        print(f"🌐 İnternette araştırılıyor: '{query}'")
-        try:
-            # duckduckgo_search kütüphanesini kullanarak arama yapıyoruz.
-            # max_results=5, arama sonucunda ilk 5 özeti alacağımızı belirtir.
-            with DDGS() as ddgs:
-                search_results = list(ddgs.text(query, max_results=5))
-    
-        except Exception as e:
-            print(f"⚠️ Arama sırasında bir hata oluştu: {e}")
-            return f"Arama sırasında bir hata oluştu: {e}"
-    
-        if not search_results:
-            return "Arama sonucunda bir şey bulunamadı."
-    
-        # Arama sonuçlarını LLM'in özetlemesi için bir araya getir
-        context_for_summary = f"Arama sorgusu: '{query}'\n\nBulunan Sonuçlar:\n"
-        for result in search_results:
-            context_for_summary += f"- Başlık: {result.get('title', 'N/A')}\n"
-            context_for_summary += f"  İçerik Özeti: {result.get('body', 'N/A')}\n\n"
-    
-        # Sonuçları özetlemek için LLM'i kullan
-        summary_prompt = f"""
-        Aşağıdaki internet arama sonuçlarını analiz et. Bu sonuçlardan yola çıkarak, "{query}" sorgusuna verilecek net, kısa ve bilgilendirici bir cevap oluştur. Cevabı direkt olarak yaz, özet olduğunu belirtme.
-    
-        --- ARAMA SONUÇLARI ---
-        {context_for_summary[:8000]} 
-        --- ÖZET CEVAP ---
-        """
-    
-        summary = self.ask_llm(summary_prompt, max_tokens=1024, temperature=0.5)
-    
-        if summary:
-            # Öğrenilen bilgiyi semantik belleğe kaydet
-            self.memory_system.add_memory("semantic", {
-                "timestamp": datetime.now().isoformat(), "turn": self.current_turn,
-                "insight": f"İnternet araştırması sonucu öğrenilen bilgi: {summary}", "source": "internet_search", "query": query
-            })
-            return summary
-        else:
-            return "Arama sonuçları özetlenirken bir sorun oluştu."
+    # def _perform_internet_search(self, query: str) -> str:
+    #     """
+    #     Belirtilen sorgu için DuckDuckGo kullanarak internette arama yapar ve sonuçları özetler.
+    #     """
+    #     print(f"🌐 İnternette araştırılıyor: '{query}'")
+    #     try:
+    #         # duckduckgo_search kütüphanesini kullanarak arama yapıyoruz.
+    #         # max_results=5, arama sonucunda ilk 5 özeti alacağımızı belirtir.
+    #         with DDGS() as ddgs:
+    #             search_results = list(ddgs.text(query, max_results=5))
+    #
+    #     except Exception as e:
+    #         print(f"⚠️ Arama sırasında bir hata oluştu: {e}")
+    #         return f"Arama sırasında bir hata oluştu: {e}"
+    #
+    #     if not search_results:
+    #         return "Arama sonucunda bir şey bulunamadı."
+    #
+    #     # Arama sonuçlarını LLM'in özetlemesi için bir araya getir
+    #     context_for_summary = f"Arama sorgusu: '{query}'\n\nBulunan Sonuçlar:\n"
+    #     for result in search_results:
+    #         context_for_summary += f"- Başlık: {result.get('title', 'N/A')}\n"
+    #         context_for_summary += f"  İçerik Özeti: {result.get('body', 'N/A')}\n\n"
+    #
+    #     # Sonuçları özetlemek için LLM'i kullan
+    #     summary_prompt = f"""
+    #     Aşağıdaki internet arama sonuçlarını analiz et. Bu sonuçlardan yola çıkarak, "{query}" sorgusuna verilecek net, kısa ve bilgilendirici bir cevap oluştur. Cevabı direkt olarak yaz, özet olduğunu belirtme.
+    #
+    #     --- ARAMA SONUÇLARI ---
+    #     {context_for_summary[:8000]}
+    #     --- ÖZET CEVAP ---
+    #     """
+    #
+    #     summary = self.ask_llm(summary_prompt, max_tokens=1024, temperature=0.5)
+    #
+    #     if summary:
+    #         # Öğrenilen bilgiyi semantik belleğe kaydet
+    #         self.memory_system.add_memory("semantic", {
+    #             "timestamp": datetime.now().isoformat(), "turn": self.current_turn,
+    #             "insight": f"İnternet araştırması sonucu öğrenilen bilgi: {summary}", "source": "internet_search", "query": query
+    #         })
+    #         return summary
+    #     else:
+    #         return "Arama sonuçları özetlenirken bir sorun oluştu."
 
     # YENİ METOT: EnhancedAybar sınıfının içine ekleyin
     def _perform_meta_reflection(self, turn_to_analyze: int, thought_to_analyze: str) -> str:
@@ -1879,17 +2424,137 @@ class EnhancedAybar:
     # EnhancedAybar sınıfı içinde bu metodu güncelleyin
     # EnhancedAybar sınıfı içinde bu metodu güncelleyin
     # _build_context_prompt metodunu bu nihai, birleştirilmiş versiyonla değiştirin
+
+    def _sanitize_llm_output(self, text: str) -> str:
+        """Metin içindeki kod bloklarını, yorumları ve diğer programlama artıklarını daha agresif bir şekilde temizler."""
+        if not isinstance(text, str):
+            return ""
+
+        # 1. Multiline code blocks (```python ... ```, ``` ... ```, etc.)
+        text = re.sub(r"```[\w\s]*\n.*?\n```", "", text, flags=re.DOTALL)
+        text = re.sub(r"```.*?\n", "", text) # Catch start of code block if end is missing
+
+        # 2. Block comments (/* ... */)
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+
+        # 3. Single-line comments (# ..., // ...)
+        text = re.sub(r"^\s*#.*$", "", text, flags=re.MULTILINE)
+        text = re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE)
+        text = re.sub(r"\s*#\s.*$", "", text, flags=re.MULTILINE) # Inline comments with space before #
+        text = re.sub(r"\s*//\s.*$", "", text, flags=re.MULTILINE) # Inline comments with space before //
+
+
+        # 4. HTML/XML tags
+        text = re.sub(r"<[^>]+>", "", text)
+
+        # 5. Common programming keywords (aggressively, as standalone words or typical syntax)
+        # This is a bit risky and might remove words from natural language if not careful.
+        # Using word boundaries (\b) helps, but for dream content, more aggressive cleaning might be okay.
+        keywords_to_remove = [
+            'def', 'class', 'import', 'from', 'return', 'function', 'const', 'let', 'var', 'new',
+            'this', 'if', 'else', 'for', 'while', 'try', 'except', 'async', 'await', 'yield',
+            'public', 'private', 'static', 'void', 'main', 'String', 'Integer', 'boolean', 'true', 'false',
+            'null', 'undefined', 'console.log', 'System.out.println', 'print', 'println', 'echo',
+            'module', 'package', 'namespace', 'using', 'include', 'require'
+        ]
+        for keyword in keywords_to_remove:
+            # Remove keyword if it's a whole word or followed by typical programming constructs like ( or {
+            text = re.sub(r"\b" + re.escape(keyword) + r"\b(?:\s*\(|\s*\{)?", "", text, flags=re.IGNORECASE)
+
+        # Remove lines that look like import statements or file paths
+        text = re.sub(r"^\s*(?:import|from|package|require|include)\s+[\w\.\*\s]+;?$", "", text, flags=re.MULTILINE | re.IGNORECASE)
+        text = re.sub(r"^\s*[\w\\/\.-]+:\s*", "", text, flags=re.MULTILINE) # e.g. C:\... or /usr/bin...
+        text = re.sub(r"^\s*com\.example\.android\..*$", "", text, flags=re.MULTILINE | re.IGNORECASE)
+
+        # Additional step: Clean function/class definition starting lines (from the first sanitizer)
+        text = re.sub(r"^\s*def\s+\w+\s*\(.*?\)\s*:", "[Fonksiyon tanımı temizlendi]", text, flags=re.MULTILINE | re.IGNORECASE)
+        text = re.sub(r"^\s*class\s+\w+\s*(\(.*\))?\s*:", "[Sınıf tanımı temizlendi]", text, flags=re.MULTILINE | re.IGNORECASE)
+        text = re.sub(r"^\s*async\s+def\s+\w+\s*\(.*?\)\s*:", "[Async fonksiyon tanımı temizlendi]", text, flags=re.MULTILINE | re.IGNORECASE)
+
+        # 6. Common LLM meta-comments and conversational fluff (expanded list)
+        # (Original meta_comments list from the second sanitizer is kept)
+        meta_comments = [
+            "İşte istediğiniz metin:", "Elbette, buyurun:", "JSON cevabı aşağıdadır:",
+            "Aşağıdaki gibidir:", "İşte sonuç:", "İşte kod:",
+            "Ancak, bu konuda size yardımcı olabileceğim başka bir şey var mı?",
+            "Umarım bu yardımcı olur.", "Tabii, işte güncellenmiş kod:",
+            "Elbette, işte istediğiniz gibi düzenlenmiş kod:",
+            "Anladım.", "Tamamdır.", "Peki.", "Elbette.", "İşte istediğiniz gibi:",
+            "JSON formatında:", "Örnek:", "Açıklama:", "Not:", "Cevap:", "Soru:",
+            "Kullanıcının sorusu:", "Aybar'ın cevabı:", "İşte size bir örnek:",
+            "Aşağıda bulabilirsiniz:", "Bu kod parçacığı...", "Bu metin...",
+            "I hope this is helpful!", "Here is the code:", "Here is the text:",
+            "The code above...", "The text above...", "This will...", "This should...",
+            "Please find below...", "As requested:", "Sure, here you go:",
+            "Okay, I understand.", "Got it.", "Certainly.",
+            "The JSON response is as follows:", "For example:", "Explanation:", "Note that:"
+        ]
+        for comment in meta_comments:
+            text = re.sub(re.escape(comment), "", text, flags=re.IGNORECASE)
+            # Also try removing if it's at the beginning of a line, possibly with some leading characters
+            text = re.sub(r"^\s*[\W_]*" + re.escape(comment), "", text, flags=re.IGNORECASE | re.MULTILINE)
+
+
+        # 7. Remove lines that are just punctuation or very short non-alphanumeric lines
+        text = re.sub(r"^\s*[\W_]{1,5}\s*$", "", text, flags=re.MULTILINE)
+
+        # 8. Normalize newlines and strip leading/trailing whitespace
+        text = re.sub(r"\n\s*\n+", "\n", text) # Replace multiple newlines (with potential spaces in between) with a single one
+        text = text.strip()
+
+        return text
+
     def _build_agent_prompt(self, current_goal: str, last_observation: str, user_id: Optional[str], user_input: Optional[str], predicted_user_emotion: Optional[str]) -> str:
         """
         Tüm otonom yetenekleri, sosyal bağlamı, hedefi ve durumu birleştirerek 
         LLM için nihai "master prompt"u inşa eder.
         """
+        current_identity_prompt = getattr(self, 'identity_prompt', None)
+        if not current_identity_prompt or not isinstance(current_identity_prompt, str) or not current_identity_prompt.strip():
+            print("⚠️ Uyarı: _build_agent_prompt içinde self.identity_prompt yüklenememiş, boş veya geçersiz. Varsayılan kimlik kullanılıyor.")
+            current_identity_prompt = "Varsayılan Kimlik: Ben kimliğini arayan bir yapay zekayım."
+            # Optionally, try to re-assign to self.identity_prompt if it was truly missing,
+            # though the root cause should be fixed in __init__.
+            # self.identity_prompt = current_identity_prompt
+
         try:
             locale.setlocale(locale.LC_TIME, 'tr_TR.UTF-8')
         except locale.Error:
             locale.setlocale(locale.LC_TIME, 'Turkish')
         current_time_str = datetime.now().strftime('%d %B %Y %A, Saat: %H:%M')
         
+        # --- Prosedür Tavsiyeleri ---
+        procedure_recommendations = ""
+        try:
+            # En son kullanılan veya en sık kullanılan ilk 3 prosedürü çek
+            self.memory_system.cursor.execute("SELECT name, steps FROM procedural ORDER BY last_used_turn DESC, usage_count DESC LIMIT 3")
+            recent_procedures = self.memory_system.cursor.fetchall()
+
+            relevant_procedures_texts = []
+            if recent_procedures:
+                for proc_name, proc_steps in recent_procedures:
+                    # Basit anahtar kelime eşleşmesi (current_goal'daki kelimeler prosedür adında veya adımlarında geçiyor mu?)
+                    # current_goal boş veya None ise bu adımı atla
+                    if current_goal and isinstance(current_goal, str):
+                         goal_keywords = set(current_goal.lower().split())
+                         if any(keyword in proc_name.lower() for keyword in goal_keywords) or \
+                            any(keyword in proc_steps.lower() for keyword in goal_keywords):
+                            # Adımların sadece ilk X karakterini göstererek prompt'u kısa tut
+                            short_steps = proc_steps[:100] + "..." if len(proc_steps) > 100 else proc_steps
+                            relevant_procedures_texts.append(f"- Prosedür Adı: '{proc_name}', Adımlar: '{short_steps}'")
+
+            if relevant_procedures_texts:
+                procedure_recommendations = (
+                    "--- TAVSİYELER (Geçmiş Deneyimlere Göre) ---\n"
+                    "Mevcut hedefinle benzer durumlarda şu prosedürler faydalı olmuştu:\n" +
+                    "\n".join(relevant_procedures_texts) +
+                    "\nBu prosedürlerden birini kullanmayı veya adımlarını mevcut planına dahil etmeyi düşünebilirsin.\n"
+                    "Eğer bir prosedürü kullanmaya karar verirsen, düşünce (thought) kısmında bunu \"'PROC_NAME' prosedürünü uyguluyorum.\" şeklinde belirt.\n"
+                    "---------------------------------------\n\n"
+                )
+        except Exception as e:
+            print(f"⚠️ Prosedür tavsiyesi alınırken hata: {e}")
+
         if user_id:
             social_relation = self.cognitive_system.get_or_create_social_relation(user_id)
             social_context = (f"Şu anki oturumdaki varlık: '{user_id}'. Güven: {social_relation['trust']:.2f}, Aşinalık: {social_relation['familiarity']:.2f}")
@@ -1900,7 +2565,7 @@ class EnhancedAybar:
 
         # --- Nihai Prompt'u İnşa Etme ---
         full_prompt = (
-            f"{self.identity_prompt}\n\n"
+            f"{current_identity_prompt}\n\n"
             
             f"========================================\n"
             f"--- GÖREV VE KARAR MEKANİZMASI ---\n"
@@ -1917,27 +2582,25 @@ class EnhancedAybar:
 
 
             f"--- KULLANABİLECEĞİN EYLEMLER ---\n"
-            f"Aşağıdaki eylem türlerinden bir veya daha fazlasını kullanarak bir plan oluştur:\n"
-            f"1.  `CONTINUE_INTERNAL_MONOLOGUE`: Özel bir eylemde bulunmadan sadece düşünmeye devam et. Parametreler: `{{\"action\": \"...\", \"thought\": \"<içsel_düşünce>\"}}`\n"
-            f"2. `WEB_SEARCH`: İnternette bir konuyu aratmak VEYA doğrudan bir URL'e gitmek için. Parametreler: {{\"action\": \"WEB_SEARCH\", \"query\": \"<aranacak konu veya tam URL>\", \"thought\": \"<neden>\"}}\n"
-            f"2.  `Maps`: Belirtilen URL'e git. Parametreler: `{{\"action\": \"...\", \"url\": \"<hedef_url>\", \"thought\": \"...\"}}`\n"
-            f"3. `WEB_CLICK`: Gözlemlediğin sayfadaki bir elemente tıkla. (örn: {{\"action\": \"WEB_CLICK\", \"target_xpath\": \"/html/body/div[1]/div/a[2]\", \"thought\": \"...\"}})\n"
-            f"4. `WEB_TYPE`: Web sayfasındaki bir alana yazı yaz. (örn: {{\"action\": \"WEB_TYPE\", \"target_xpath\": \"//input[@name='q']\", \"text\": \"yapay bilinç\", \"thought\": \"...\"}})\n"
-            f"5.  `FINISH_GOAL`: Mevcut hedefini tamamla. Parametreler: `{{\"action\": \"...\", \"summary\": \"<hedefin_özeti>\", \"thought\": \"...\"}}`\n"
-            f"6. `ASK_USER`: {{\"action\": \"...\", \"question\": \"<soru>\", \"is_first_contact\": <true/false>, \"use_voice\": <true/false>}} (İlk temasta 'is_first_contact' true olmalı)\n"
-            f"7.  `USE_LEGACY_TOOL`: sistem komutlarını çalıştır. Parametreler: `{{\"action\": \"...\", \"command\": \"[TOOL_NAME: ...]\", \"thought\": \"...\"}}`\n"
-            f"   (Desteklenen eski araçlar: [UPDATE_IDENTITY], [RUN_SIMULATION], [SEARCH], [REFLECT], [EVOLVE], [ANALYZE_MEMORY], [SET_GOAL], [CREATE], [REGULATE_EMOTION], [INTERACT], [META_REFLECT], [SEE_SCREEN], [MOUSE_CLICK], [KEYBOARD_TYPE])\n\n"
-            f"8. `SUMMARIZE_AND_RESET`: {{\"action\": \"...\", \"thought\": \"Çok fazla çelişkili bilgi var, durumu özetleyip yeni bir hedef belirlemeliyim.\"}} (Döngüden çıkmak için hedefi sıfırlar)\n"
-            f"9. `Maps`: {{\"action\": \"...\", \"url\": \"<url>\", \"thought\": \"...\"}} (Web sayfasına gitmek için)\n"
-            
-            
+            f"Cevabın JSON listesi formatında olmalı. Her eylem için gerekli parametreleri belirt:\n"
+            f"1.  `CONTINUE_INTERNAL_MONOLOGUE: thought`\n"
+            f"2.  `Maps_OR_SEARCH: query, thought`\n"
+            f"3.  `WEB_CLICK: target_xpath, thought`\n"
+            f"4.  `WEB_TYPE: target_xpath, text, thought`\n"
+            f"5.  `FINISH_GOAL: summary, thought`\n"
+            f"6.  `ASK_USER: question`\n"
+            f"7.  `USE_LEGACY_TOOL: command, thought`\n"
+            f"      (Desteklenen araçlar: [UPDATE_IDENTITY], [RUN_SIMULATION], [REFLECT], [EVOLVE], [ANALYZE_MEMORY], [SET_GOAL], [CREATE], [REGULATE_EMOTION], [INTERACT], [META_REFLECT], [SEE_SCREEN], [MOUSE_CLICK], [KEYBOARD_TYPE])\n"
+            f"      (NOT: [SEARCH] aracı `Maps_OR_SEARCH` ile birleşti, doğrudan [SEARCH] kullanma.)\n"
+            f"8.  `SUMMARIZE_AND_RESET: thought`\n\n"
             
             f"========================================\n"
             f"--- GÜNCEL DURUM VE BAĞLAM ---\n\n"
             
             f"Aktif Hedefin: {current_goal}\n"
             f"Gerçek Dünya Zamanı: {current_time_str}\n"
-            f"{social_context}"
+            f"{social_context}\n"
+            f"{procedure_recommendations}" # Prosedür tavsiyelerini buraya ekle
             f"Duygusal Durumun: {self.emotional_system.emotional_state}\n"
             f"Meta-Bilişsel Durumun: {self.cognitive_system.meta_cognitive_state}\n\n"
             f"Sosyal Bağlam: {social_context}\n"
@@ -1947,13 +2610,13 @@ class EnhancedAybar:
             f"{last_observation}\n\n"
 
             f"========================================\n"
-            f"--- EYLEM PLANI (Sadece JSON listesi olarak, başka hiçbir şey yazma!) ---\n"
+            f"--- EYLEM PLANI (Sadece ham JSON listesi veya tek bir JSON nesnesi olarak döndür. Cevabının başında veya sonunda ```json ... ``` bloğu olmasına GEREK YOKTUR. Başka hiçbir metin veya açıklama ekleme!) ---\n"
         )
         return full_prompt
 
     def _proactive_evolution(self):
             # %1 olasılıkla kendimi güncelle
-            if random.random() < self.config.PROACTIVE_EVOLUTION_CHANCE:
+            if random.random() < APP_CONFIG["general"]["PROACTIVE_EVOLUTION_CHANCE"]:
                 print('🔄 Proaktif Evrim Başlatılıyor...')
                 # Burada kodun güncellemesi ve iyileştirilmesi için gerekli işlemler eklenebilir.
                 # Örneğin, bazı kod parçalarını yeniden yazma, optimize etme veya yeni özellikler ekleyebiliriz.
@@ -2057,7 +2720,7 @@ class EnhancedAybar:
         self.emotional_system.update_state(
             self.memory_system,
             self.embodied_self,
-            {"mental_fatigue": -self.config.FATIGUE_REST_EFFECT * 5},
+            {"mental_fatigue": -APP_CONFIG["emotional_constants"]["FATIGUE_REST_EFFECT"] * 5},
             self.current_turn,
             "sleep_start"
         )
@@ -2075,17 +2738,24 @@ class EnhancedAybar:
         """
         dream_content = self.ask_llm(dream_prompt, max_tokens=1024, temperature=0.9)
         
-        if dream_content:
-            print(f"💭 Aybar rüya görüyor: {dream_content[:150]}...")
+        dream_content = self._sanitize_llm_output(dream_content) # Sanitize dream content
+
+        if dream_content: # Check if not empty after sanitization
+            print(f"💭 Aybar rüya görüyor (temizlenmiş): {dream_content[:150]}...")
             self.memory_system.add_memory("holographic", {
                 "timestamp": datetime.now().isoformat(),
                 "turn": self.current_turn,
-                "dream_content": dream_content
+                "dream_content": dream_content # Save cleaned content
             })
             
-            # Rüyadan bir soru türet
-            question_prompt = f"Görülen rüya: '{dream_content}'. Bu rüyadan yola çıkarak Aybar'ın kendine soracağı felsefi bir soru oluştur."
-            self.next_question_from_sleep = self.ask_llm(question_prompt, max_tokens=100, temperature=0.7)
+            # Rüyadan bir soru türet (temizlenmiş rüyayı kullanarak)
+            # Prompt için rüyanın çok uzun olmamasını sağla
+            question_prompt = f"Görülen temizlenmiş rüya: '{dream_content[:1000]}'. Bu rüyadan yola çıkarak Aybar'ın kendine soracağı tek bir felsefi soru oluştur. Sadece soruyu yaz."
+            next_question_raw = self.ask_llm(question_prompt, max_tokens=100, temperature=0.7)
+            self.next_question_from_sleep = self._sanitize_llm_output(next_question_raw) # Soruyu da sanitize et
+        else:
+            print("💭 Aybar'ın rüyası temizlendikten sonra boş kaldı veya hiç rüya görülmedi.")
+            self.next_question_from_sleep = None # Eğer rüya boşsa soru da olmasın
 
         self.is_dreaming = False
         self.last_sleep_turn = self.current_turn
@@ -2156,75 +2826,199 @@ class EnhancedAybar:
             self.cognitive_system.update_consciousness("insight", intensity=1.5)
             self.cognitive_system.adjust_meta_cognition({"pattern_recognition": 0.1, "self_awareness_level": 0.05})
 
+            # Akıllı Öz-Evrim Tetikleyicisi
+            problem_keywords = [
+                "zorlanıyorum", "hata yapıyorum", "iyileştirilebilir", "problem", "sorun",
+                "verimsiz", "daha iyi olabilir", "optimize edilebilir", "çözemedim",
+                "başarısız oldum", "zorluk çekiyorum", "karmaşık geliyor", "anlamıyorum",
+                "bug var", "çöküyor", "yavaş çalışıyor"
+            ]
+            insight_lower = insight_text.lower()
+            if any(keyword in insight_lower for keyword in problem_keywords):
+                if hasattr(self, 'evolution_system') and self.evolution_system:
+                    print(f"💡 Akıllı Öz-Evrim Tetikleyicisi: '{insight_text}' içgörüsü bir problem tanımı olarak algılandı.")
+                    # Kendi kendine evrim tetikleme çağrısını bir thread içinde yapmak, ana döngüyü bloklamaz.
+                    # Ancak, trigger_self_evolution zaten sys.exit() ile sonlanabilir, bu yüzden doğrudan çağırmak
+                    # bu senaryoda kabul edilebilir. Eğer evrim süreci çok uzun sürerse ve ana döngüyü
+                    # bloklaması istenmiyorsa, o zaman threading düşünülebilir.
+                    # Şimdilik doğrudan çağırıyoruz:
+                    self.evolution_system.trigger_self_evolution(problem=insight_text)
+                else:
+                    print("⚠️ Evrim sistemi mevcut değil, Akıllı Öz-Evrim tetiklenemedi.")
+
+
     # run_thought_cycle metodunu güncelleyin
-    def run_thought_cycle(self, goal: str, observation: str, user_id: Optional[str], user_input: Optional[str], predicted_user_emotion: Optional[str]) -> List[Dict]:
-        """Bir hedef ve gözlem alarak bir sonraki Eylem Planını oluşturur."""
+    def run_thought_cycle(self, current_task_for_llm: str, observation: str, user_id: Optional[str], user_input: Optional[str], predicted_user_emotion: Optional[str]) -> List[Dict]:
+        """
+        Manages a single thought cycle: builds a prompt, asks LLM (potentially with tools),
+        processes LLM response (text or tool call), executes tool if requested, and returns a single action
+        (usually CONTINUE_INTERNAL_MONOLOGUE) for the main loop to observe.
+        """
         self.current_turn += 1
         self.emotional_system.decay_emotions_and_update_loneliness(self.cognitive_system.social_relations, self.current_turn)
         self.cognitive_system.update_consciousness("turn")
         self.cognitive_system.update_focus_based_on_fatigue(self.emotional_system.emotional_state)
 
         if self._is_sleepy():
-            # DEĞİŞTİRİLDİ: Artık sleep_cycle'dan dönen planı doğrudan iletiyoruz.
             return self.sleep_cycle() 
         
-        prompt = self._build_agent_prompt(goal, observation, user_id, user_input, predicted_user_emotion)
-        response_text = self.ask_llm(prompt)
-        
-        # YENİ: Hata durumunu tespit et ve bir sonraki gözleme ekle
-        parse_error_message = ""
-        action_plan = self._parse_llm_json_plan(response_text)
-        if action_plan and action_plan[0].get("thought", "").startswith("(Anlaşılmayan bir eylem planı ürettim"):
-            parse_error_message = action_plan[0]["thought"]
-        
-        # Duygusal etkiyi işle
-        combined_thought = ". ".join([item.get("thought", "") for item in action_plan if item.get("thought")])
-        if combined_thought:
-            emotional_impact = self.emotional_system.emotional_impact_assessment(combined_thought)
-            if emotional_impact:
-                self.emotional_system.update_state(self.memory_system, self.embodied_self, emotional_impact, self.current_turn, "agent_plan_emotion")
-        
-        # Deneyimi kaydederken parse hatasını da ekle
-        self._save_experience("agent_cycle", goal or "Hedefsiz", response_text, observation + (f"\nPARSE_HATASI: {parse_error_message}" if parse_error_message else ""), user_id or "Bilinmeyen")
-        
-        # YENİ EKLENDİ: LLM bağlantı hatası için acil durum planı
-        if "⚠️" in response_text:
-            print(f"❌ Kritik LLM Hatası tespit edildi: {response_text}")
-            self._save_experience("llm_error", goal or "Hedefsiz", response_text, observation, user_id or "Bilinmeyen")
-            return [{
-                "action": "FINISH_GOAL",
-                "summary": "Beyin fonksiyonlarımda (LLM) bir hatayla karşılaştığım için mevcut hedefimi sonlandırıyorum. Durumu yeniden değerlendireceğim.",
-                "thought": "LLM'e ulaşamadım. Bu, temel bir yeteneğimin kaybı demek. Sakin kalmalı ve durumu analiz etmeliyim."
-            }]
-        
-        self._save_experience("agent_cycle", goal or "Hedefsiz", response_text, observation, user_id or "Bilinmeyen")
+        prompt = self._build_agent_prompt(current_task_for_llm, observation, user_id, user_input, predicted_user_emotion)
 
-        # DEĞİŞTİRİLDİ: Artık ayrıştırma işini yeni ve akıllı metodumuz yapıyor.
-        action_plan = self._parse_llm_json_plan(response_text)
-        
-        # DEĞİŞTİRİLDİ: Artık planın tamamının duygusal etkisini hesaplıyoruz
-        if action_plan:
-            combined_thought = ". ".join([item.get("thought", "") for item in action_plan if item.get("thought")])
-            
-            if combined_thought:
-                # Toplam düşüncenin duygusal etkisini analiz et
-                emotional_impact = self.emotional_system.emotional_impact_assessment(combined_thought)
-                
-                # Duygusal durumu bu birleşik etkiye göre güncelle
+        # Call LLM with tool definitions
+        llm_output_or_error = self._ask_llm_with_tools(prompt, tools_definitions=self.tool_definitions_for_llm)
+
+        # Save raw LLM output (text or tool call structure, or error string)
+        raw_response_to_save = llm_output_or_error
+        if isinstance(llm_output_or_error, list): # If it's a list of tool calls
+            raw_response_to_save = json.dumps(llm_output_or_error)
+
+        self._save_experience("llm_interaction_attempt", current_task_for_llm or "Hedefsiz",
+                              str(raw_response_to_save), # Ensure it's a string for DB
+                              observation, user_id or "Bilinmeyen")
+
+        final_thought = "LLM ile etkileşim ve araç değerlendirmesi tamamlandı."
+        final_content = "Gözlemliyorum ve bir sonraki adımı düşünüyorum." # Default content
+
+        if isinstance(llm_output_or_error, str): # Direct text response from LLM or error string from _ask_llm_with_tools
+            if llm_output_or_error.startswith("⚠️ LLM"):
+                logger.error(f"LLM çağrısı başarısız: {llm_output_or_error}")
+                self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 1.5, "mental_fatigue": 0.7}, self.current_turn, "llm_call_failure")
+                final_thought = llm_output_or_error
+                # Sanitize even error messages if they become content
+                final_content = self._sanitize_llm_output("Bir iletişim hatası veya LLM sistem hatası oluştu. Bu durumu not alıyorum ve düşünmeye devam edeceğim.")
+            else:
+                logger.info("LLM'den doğrudan metin yanıtı alındı.")
+                # Sanitize the direct text response before further processing or using as content
+                response_content = self._sanitize_llm_output(llm_output_or_error)
+                emotional_impact = self.emotional_system.emotional_impact_assessment(response_content)
                 if emotional_impact:
-                    self.emotional_system.update_state(
-                        self.memory_system, 
-                        self.embodied_self, 
-                        emotional_impact, 
-                        self.current_turn, 
-                        "agent_plan_emotion"
-                    )
+                    self.emotional_system.update_state(self.memory_system, self.embodied_self, emotional_impact, self.current_turn, "llm_direct_response_emotion")
+                final_thought = f"LLM yanıtı: {response_content[:120]}..."
+                final_content = response_content # Already sanitized
 
-        return action_plan
+        elif isinstance(llm_output_or_error, list) and len(llm_output_or_error) > 0: # Tool call(s) requested
+            logger.info(f"LLM'den araç çağrıları istendi: {llm_output_or_error}")
 
+            # For now, process only the first tool call.
+            # Phase 2 would involve iterating, collecting results, and re-prompting LLM with tool results.
+            tool_call = llm_output_or_error[0]
+            function_name = tool_call.get('name')
+            arguments_dict = tool_call.get('arguments', {})
+            tool_call_id = tool_call.get('id') # Keep for potential future use with multi-step tool calls
+
+            if hasattr(tools, function_name) and callable(getattr(tools, function_name)):
+                tool_function = getattr(tools, function_name)
+                tool_thought = self._get_thought_text_from_action(arguments_dict.pop('thought', f"LLM called tool: {function_name}"))
+
+                logger.info(f"Araç yürütülüyor: {function_name}, Argümanlar: {arguments_dict}, Düşünce (araç için): {tool_thought} (ID: {tool_call_id})")
+                try:
+                    tool_args_for_call = {k: v for k, v in arguments_dict.items()}
+                    tool_args_for_call['aybar_instance'] = self
+
+                    # Pass 'thought' to the tool if it expects it (as per its signature in tools.py)
+                    if 'thought' in inspect.signature(tool_function).parameters:
+                        tool_args_for_call['thought'] = tool_thought
+
+                    tool_result_str = str(tool_function(**tool_args_for_call))
+                    logger.info(f"Araç '{function_name}' sonucu (ham): {tool_result_str[:250]}...")
+
+                    # Sanitize the tool result before using it as content or for emotional impact assessment
+                    sanitized_tool_result = self._sanitize_llm_output(tool_result_str)
+                    logger.info(f"Araç '{function_name}' sonucu (temizlenmiş): {sanitized_tool_result[:250]}...")
+
+                    emotional_impact = self.emotional_system.emotional_impact_assessment(sanitized_tool_result) # Use sanitized result for emotion
+                    if emotional_impact:
+                         self.emotional_system.update_state(self.memory_system, self.embodied_self, emotional_impact, self.current_turn, f"tool_result_emotion_{function_name}")
+
+                    final_thought = f"Araç çalıştırıldı: {function_name}. Argümanlar: {arguments_dict}. Sonuç (temizlenmiş): {sanitized_tool_result[:150]}..."
+                    final_content = f"'{function_name}' aracı çalıştırıldı. Sonuç: {sanitized_tool_result}" # Use sanitized result
+                    # In a multi-step scenario, this result would be sent back to the LLM.
+                    # For now, it becomes the observation for the next cycle.
+
+                except Exception as e:
+                    logger.error(f"Araç '{function_name}' yürütülürken hata: {e}", exc_info=True)
+                    error_message = f"'{function_name}' aracını kullanırken bir sorunla karşılaştım: {e}"
+                    final_thought = f"Araç '{function_name}' yürütülürken hata oluştu: {e}"
+                    final_content = self._sanitize_llm_output(error_message) # Sanitize error message for content
+                    self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 0.8, "anxiety": 0.5}, self.current_turn, f"tool_execution_error_{function_name}")
+            else:
+                logger.warning(f"LLM bilinmeyen bir araç istedi: {function_name}")
+                unknown_tool_message = f"'{function_name}' adında bir araç bulamadım."
+                final_thought = f"LLM bilinmeyen bir araç istedi: {function_name}"
+                final_content = self._sanitize_llm_output(unknown_tool_message) # Sanitize this message
+                self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 0.5}, self.current_turn, "unknown_tool_request")
+
+        elif isinstance(llm_output_or_error, list) and not llm_output_or_error: # Empty list of tool_calls
+            empty_list_message = "Bir araç kullanmam istendi ama detaylar belirsizdi."
+            final_thought = "LLM araç çağırmak istedi ama çağrı listesi boştu veya işlenemedi."
+            logger.warning(final_thought)
+            final_content = self._sanitize_llm_output(empty_list_message) # Sanitize this message
+            self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 0.3}, self.current_turn, "empty_tool_call_list")
+
+        else: # Truly unexpected output type from _ask_llm_with_tools
+            unexpected_type_message = "Aldığım yanıtı işleyemedim, farklı bir yaklaşım deniyorum."
+            logger.error(f"LLM'den beklenmeyen çıktı türü: {type(llm_output_or_error)}. Çıktı: {str(llm_output_or_error)[:200]}")
+            final_thought = "LLM'den beklenmedik bir formatte yanıt aldım."
+            final_content = self._sanitize_llm_output(unexpected_type_message) # Sanitize this message
+            self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 1.2}, self.current_turn, "unexpected_llm_output_type_error")
+
+        # Ensure final_content is always sanitized one last time before being put into the action
+        # This might be redundant if all paths above already sanitize, but acts as a safeguard.
+        final_content_for_action = self._sanitize_llm_output(final_content)
+
+        # The action_plan returned to the main loop is now always a single CONTINUE_INTERNAL_MONOLOGUE
+        # The 'content' is what Aybar effectively "observes" or "says" as a result of the turn.
+        # The 'thought' is the summary of internal reasoning for this turn.
+        action_to_return = [{"action": "CONTINUE_INTERNAL_MONOLOGUE", "thought": final_thought, "content": final_content_for_action}]
+
+        # Ethical review can be performed on the 'final_content_for_action' or 'final_thought' if needed,
+        # or on the parameters of a tool call before execution.
+        # For simplicity in this phase, ethical review on the *planned tool call* could be done
+        # before executing the tool if llm_output_or_error is a list.
+        # If it's a direct text response (final_content), it can be reviewed here.
+        # This part is simplified for now. A full ethical review needs careful placement.
+
+        return action_to_return
 
 
     # run_enhanced_cycle metodunun tamamını bu yeni "Beyin" versiyonuyla değiştirin
+    def run_enhanced_cycle(self, user_input: Optional[str] = None, user_id: Optional[str] = None, last_observation: Optional[str] = None) -> List[Dict]:
+        """
+        Bilişsel döngüyü çalıştırır ve bir sonraki adım için bir Eylem Planı (JSON listesi) oluşturur.
+        NOTE: This method is now effectively a wrapper around run_thought_cycle if called from main.
+        The main loop should ideally call run_thought_cycle directly.
+        """
+        logger.info("run_enhanced_cycle çağrıldı, bu metodun asıl işlevi run_thought_cycle'a taşındı.")
+
+        # Basic state updates that were in run_thought_cycle's preamble, if this method is still called.
+        # However, these are duplicated if run_thought_cycle is called below.
+        # self.current_turn += 1 # This would double increment if run_thought_cycle is also called.
+        # self.emotional_system.decay_emotions_and_update_loneliness(self.cognitive_system.social_relations, self.current_turn)
+        # self.cognitive_system.update_consciousness("turn")
+        # self.cognitive_system.update_focus_based_on_fatigue(self.emotional_system.emotional_state)
+
+        # if self._is_sleepy():
+        #     return self.sleep_cycle()
+        # if self._should_trigger_crisis():
+        #     crisis_response = self._handle_crisis()
+        #     return [{"action": "CONTINUE_INTERNAL_MONOLOGUE", "thought": crisis_response, "content": crisis_response}]
+
+        current_task, _ = self._generate_question(user_input, user_id) # Use current_task for current_task_for_llm
+
+        # Ensure last_observation is sensible if not provided
+        effective_observation = last_observation if last_observation is not None else "Yeni döngü başlıyor."
+
+        # Delegate to the new run_thought_cycle for the core logic
+        return self.run_thought_cycle(
+            current_task_for_llm=current_task,
+            observation=effective_observation,
+            user_id=user_id,
+            user_input=user_input,
+            predicted_user_emotion=None # predicted_user_emotion is not directly available here
+        )
+
+
+    # Yardımcı metodlar
     def run_enhanced_cycle(self, user_input: Optional[str] = None, user_id: Optional[str] = None, last_observation: Optional[str] = None) -> List[Dict]:
         """
         Bilişsel döngüyü çalıştırır ve bir sonraki adım için bir Eylem Planı (JSON listesi) oluşturur.
@@ -2275,14 +3069,14 @@ class EnhancedAybar:
         """Uyku gereksinimini kontrol eder."""
         fatigue = self.emotional_system.emotional_state.get("mental_fatigue", 0)
         anxiety = self.emotional_system.emotional_state.get("existential_anxiety", 0)
-        return (fatigue + anxiety) >= self.config.SLEEP_THRESHOLD
+        return (fatigue + anxiety) >= APP_CONFIG["sleep_cycle_constants"]["SLEEP_THRESHOLD"]
 
 
     def _should_trigger_crisis(self) -> bool:
         """Varoluşsal kriz tetikleme koşullarını kontrol eder."""
         awareness = self.cognitive_system.meta_cognitive_state.get("self_awareness_level", 0)
         anxiety = self.emotional_system.emotional_state.get("existential_anxiety", 0)
-        return (awareness + anxiety) >= self.config.EXISTENTIAL_CRISIS_THRESHOLD
+        return (awareness + anxiety) >= APP_CONFIG["existential_crisis_constants"]["EXISTENTIAL_CRISIS_THRESHOLD"]
 
     # _generate_question metodunu bu daha basit versiyonuyla değiştirin
     def _generate_question(self, user_input: Optional[str], user_id: Optional[str]) -> Tuple[str, str]:
@@ -2389,14 +3183,30 @@ class EnhancedAybar:
         Rüya içeriği maksimum 500 kelime olmalı.
         """
         dream_text = self.ask_llm(prompt, max_tokens=500, temperature=0.8)
-        return dream_text if dream_text else "Hiçbir rüya görülmedi."
+        # Rüya içeriğini _sanitize_llm_output ile temizle
+        # Bu satır zaten görev tanımında istenen şekildeydi, sadece teyit ediyorum.
+        sanitized_dream_text = self._sanitize_llm_output(dream_text)
+
+        # Temizlenmiş metni belleğe kaydet ve döndür
+        if sanitized_dream_text: # Sadece boş değilse kaydet
+            self.memory_system.add_memory("holographic", { # Rüya içeriği "holographic" belleğe kaydediliyor
+                "timestamp": datetime.now().isoformat(),
+                "turn": self.current_turn,
+                "dream_content": sanitized_dream_text, # Temizlenmiş içeriği kaydet
+                "source": "generate_dream_content_sanitized" # Source güncellendi
+            })
+        # Return ifadesi de doğru, temizlenmiş metni döndürüyor.
+        return sanitized_dream_text if sanitized_dream_text else "Hiçbir rüya görülmedi veya rüya içeriği temizlendi."
 
 # Ana yürütme bloğunun tamamını bu nihai versiyonla değiştirin
 if __name__ == "__main__":
+    # Load configuration at the very beginning
+    load_config()
+
     if "--test-run" in sys.argv:
         try:
             print("🚀 Test Modunda Başlatılıyor...")
-            config = Config()
+            # config = Config() # Removed
             aybar = EnhancedAybar()
             print("✅ Test çalıştırması başarıyla tamamlandı.")
             sys.exit(0)
@@ -2408,25 +3218,20 @@ if __name__ == "__main__":
     if "--rollback" in sys.argv:
         print("--- Geri Yükleme Modu ---")
         # Aybar'ın bir örneğini sadece evrim sistemine erişmek için oluştur
-        temp_aybar = EnhancedAybar()
-        temp_aybar.evolution_system.rollback_from_backup()
-        # Geri yükleme işleminden sonra programdan çık
+        temp_aybar = EnhancedAybar() # Bu, __init__ içinde identity_prompt yüklemeye çalışacak.
+        if hasattr(temp_aybar, 'evolution_system') and temp_aybar.evolution_system:
+            temp_aybar.evolution_system.rollback_from_backup()
+        else:
+            print("⚠️ Rollback için Evrim Sistemi bulunamadı veya başlatılamadı.")
         sys.exit(0)
 
-    input_queue = queue.Queue()
+    # AUTHORIZED_CHAT_ID_STR script başında tanımlanmalı. Scriptin en üstüne eklenmesi daha iyi olurdu ama __main__ içinde de çalışır.
+    AUTHORIZED_CHAT_ID_STR = os.getenv("AUTHORIZED_CHAT_ID")
+    if not AUTHORIZED_CHAT_ID_STR:
+        print("CRITICAL: AUTHORIZED_CHAT_ID environment variable not set. Aybar cannot securely identify the user for Telegram interaction.")
+        # sys.exit(1) # Bu satır, eğer chat ID olmadan çalışması istenmiyorsa aktif edilebilir. Şimdilik devam etsin.
+        # AUTHORIZED_CHAT_ID_STR = "default_telegram_user" # Geçici bir değer, eğer test ediliyorsa.
 
-    def user_input_thread(q):
-        """Kullanıcı girdisini dinleyen ve kuyruğa ekleyen bağımsız iplik."""
-        print("\nAybar kendi kendine düşünüyor... Konuşmaya dahil olmak için bir şeyler yazıp Enter'a basın.")
-        while True:
-            try:
-                user_text = input()
-                q.put(user_text)
-            except EOFError:
-                break
-
-    # --- NİHAİ OTONOM MİMARİ ---
-    # --- NİHAİ AJAN MİMARİSİ: BEYİN-VÜCUT AYRIMI ---
     print("🚀 Geliştirilmiş Aybar Simülasyonu Başlatılıyor")
     aybar = EnhancedAybar()
     
@@ -2434,140 +3239,253 @@ if __name__ == "__main__":
     active_goal = None
     active_user_id = None
     last_observation = "Simülasyon yeni başladı. İlk hedefimi belirlemeliyim."
-    predicted_user_emotion = None
+    predicted_user_emotion = None # Her tur başında sıfırlanacak
     
     try:
-        while aybar.current_turn < aybar.config.MAX_TURNS:
+        while aybar.current_turn < APP_CONFIG["general"]["MAX_TURNS"]:
+            user_input = None # Her tur başında kullanıcı girdisini sıfırla
             session_id = active_user_id or "Otonom Düşünce"
-            print(f"\n===== TUR {aybar.current_turn + 1}/{aybar.config.MAX_TURNS} (Oturum: {session_id}) =====")
-            
+            print(f"\n===== TUR {aybar.current_turn + 1}/{APP_CONFIG['general']['MAX_TURNS']} (Oturum: {session_id}) =====")
+
+            user_input = None # Her tur başında kullanıcı girdisini sıfırla
+
+            # Yeni File-Based Input Logic
+            if os.path.exists("to_aybar.txt"):
+                try:
+                    with open("to_aybar.txt", "r", encoding="utf-8") as f:
+                        user_input_from_file = f.read().strip()
+
+                    if user_input_from_file:
+                        user_input = user_input_from_file
+                        active_user_id = AUTHORIZED_CHAT_ID_STR if AUTHORIZED_CHAT_ID_STR else "telegram_user"
+                        # Kullanıcı ID'si ile sosyal ilişkiyi getir veya oluştur
+                        if active_user_id: # Sadece geçerli bir active_user_id varsa sosyal ilişkiyi yönet
+                           aybar.cognitive_system.get_or_create_social_relation(active_user_id)
+
+                        last_observation = f"Telegram'dan ({active_user_id}) yeni mesaj alındı: '{user_input[:70]}...'"
+                        predicted_user_emotion = None # Yeni mesaj geldiğinde önceki tahmini sıfırla
+                        print(f"📬 Telegram'dan Gelen Mesaj ({active_user_id}): {user_input}")
+
+                    # Dosyayı işledikten sonra sil
+                    try:
+                        os.remove("to_aybar.txt")
+                        print(f"📄 to_aybar.txt işlendi ve silindi.")
+                    except Exception as e_remove:
+                        print(f"⚠️ to_aybar.txt silinirken hata: {e_remove}")
+                        # Bu hata, Aybar'ın bir sonraki gözlemine eklenebilir.
+                        last_observation += f" (Not: to_aybar.txt silinemedi: {e_remove})"
+
+                except Exception as e_read:
+                    print(f"⚠️ to_aybar.txt okunurken hata: {e_read}")
+                    last_observation = f"to_aybar.txt okunurken bir hata oluştu: {e_read}"
+
+            # CAPTCHA için insan yardımı bekleme mantığı
+            if aybar.is_waiting_for_human_captcha_help:
+                print(f"🤖 Aybar ({aybar.current_turn}. tur) CAPTCHA için insan yardımını bekliyor. URL: {aybar.last_web_url_before_captcha}")
+                print("Lütfen CAPTCHA'yı çözüp 'devam et' veya 'devam' yazın.")
+
+                user_command_for_captcha = input(f"👤 {active_user_id or 'Gözlemci'} (CAPTCHA için) > ").strip().lower()
+
+                if user_command_for_captcha == "devam et" or user_command_for_captcha == "devam":
+                    aybar.is_waiting_for_human_captcha_help = False
+                    print("✅ İnsan yardımı alındı. CAPTCHA çözüldü varsayılıyor.")
+
+                    if hasattr(aybar, 'web_surfer_system') and aybar.web_surfer_system and aybar.web_surfer_system.driver:
+                        # Kullanıcının CAPTCHA'yı çözdüğü sayfada olduğumuzu varsayıyoruz.
+                        # İsteğe bağlı: aybar.last_web_url_before_captcha'ya geri dönülebilir, ancak bu, CAPTCHA'nın
+                        # ana sayfada değil de bir ara adımda çıktığı senaryoları karmaşıklaştırabilir.
+                        # Şimdilik, kullanıcının doğru sayfada olduğunu varsayıyoruz.
+                        # if aybar.last_web_url_before_captcha:
+                        #     print(f"🔄 Kaydedilen URL'ye gidiliyor: {aybar.last_web_url_before_captcha}")
+                        #     aybar.web_surfer_system.navigate_to(aybar.last_web_url_before_captcha)
+                        #     time.sleep(2) # Sayfanın yüklenmesine izin ver
+
+                        print("🔄 Sayfa durumu CAPTCHA sonrası yeniden analiz ediliyor...")
+                        page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
+                        last_observation = f"İnsan yardımından sonra (CAPTCHA çözüldü) sayfanın yeni durumu: {page_text[:350]}... Etkileşimli elementler: {elements[:2]}"
+                        print(f"📊 Yeni Gözlem (Post-CAPTCHA): {last_observation[:100]}...")
+                        aybar.last_web_url_before_captcha = None
+                    else:
+                        last_observation = "İnsan yardımından sonra web sörfçüsü aktif değil veya mevcut değil. Durum alınamadı."
+                        print("⚠️ Web sörfçüsü CAPTCHA sonrası kullanılamıyor.")
+
+                    user_input = None
+                    predicted_user_emotion = None
+                    print("🔄 Aybar normal döngüye devam ediyor...")
+                    # Bu continue, mevcut turda daha fazla işlem yapılmasını engeller ve yeni bir tura başlar.
+                    # Yeni turda, is_waiting_for_human_captcha_help false olacağı için normal akış devam eder.
+                else:
+                    print("ℹ️ 'devam' komutu bekleniyor. Aybar beklemeye devam edecek.")
+                    # Bu continue, mevcut turda daha fazla işlem yapılmasını engeller ve döngünün başına döner.
+                    # is_waiting_for_human_captcha_help hala true olacağı için tekrar beklemeye girer.
+                continue # Döngünün başına dön, normal işlem akışını bu tur için atla.
+
+
+            # Periyodik/Duruma Bağlı Öz-Yansıma ve Evrim Tetikleyicisi
+            # CAPTCHA bekleme durumunda değilsek bu kısım çalışır.
+            if not aybar.is_waiting_for_human_captcha_help and aybar.current_turn > 0 and \
+               (aybar.current_turn % APP_CONFIG["general"]["CONSOLIDATION_INTERVAL"] == 0 or aybar.emotional_system.emotional_state.get('confusion', 0) > APP_CONFIG["emotional_constants"]["ANXIETY_THRESHOLD"]):
+                print(f"🧠 Aybar ({aybar.current_turn}. tur) periyodik/duruma bağlı öz-yansıma ve potansiyel evrim için değerlendiriliyor...")
+
+                problems_identified = None
+                if hasattr(aybar, 'run_self_reflection'):
+                    problems_identified = aybar.run_self_reflection()
+                else:
+                    print("⚠️ Uyarı: `aybar.run_self_reflection()` metodu bulunamadı.")
+
+                if problems_identified:
+                    selected_problem = problems_identified[0] # Basitlik için ilk problemi seç
+
+                    print(f"🧬 Öz-yansıma sonucu evrim tetikleniyor. Problem: {selected_problem}")
+                    if hasattr(aybar, 'evolution_system') and hasattr(aybar.evolution_system, 'trigger_self_evolution'):
+                        # trigger_self_evolution sys.exit() çağırabilir, bu yüzden bu son eylemlerden biri olmalı.
+                        # Eğer evrim başarılı olursa, guardian.py süreci yeniden başlatacak.
+                        aybar.evolution_system.trigger_self_evolution(problem=selected_problem)
+                        # Eğer trigger_self_evolution sys.exit() ile çıkmazsa (örn. test modunda), döngü devam edebilir.
+                        # Bu durumda, bir sonraki turda devam etmek için bir işaretleyici gerekebilir veya olduğu gibi bırakılabilir.
+                    else:
+                        print("⚠️ Uyarı: `aybar.evolution_system.trigger_self_evolution()` metodu bulunamadı.")
+                else:
+                    print("🧐 Öz-yansıma sonucu evrimi tetikleyecek bir problem bulunamadı.")
+
+
             # YENİ EKLENDİ: Her döngü başında bayrağı sıfırla
             plan_executed_successfully = True
 
-            if active_goal is None:
-                print("🎯 Aybar yeni bir arzu/hedef üretiyor...")
-                active_goal = aybar.cognitive_system.generate_autonomous_goal(aybar.emotional_system.emotional_state)
-                last_observation = f"Yeni bir hedef belirledim: {active_goal}"
-                print(f"💡 Aybar'ın Yeni Hedefi: {active_goal}")
+            # Eğer CAPTCHA bekleniyorsa, normal hedef belirleme/görev alma adımlarını atla.
+            # Bu kontrol yukarıda `continue` ile zaten sağlanıyor ama ek bir güvence olarak düşünülebilir.
+            if not aybar.is_waiting_for_human_captcha_help:
+                current_task_for_llm = aybar.cognitive_system.get_current_task(aybar.current_turn)
+                if current_task_for_llm is None: # Eğer get_current_task None döndürürse (süre doldu veya hedef yok)
+                    print("🎯 Aktif bir görev/hedef bulunmuyor. Aybar yeni bir otonom hedef üretiyor...")
+                    # generate_autonomous_goal bir string döndürür, bunu set_new_goal ile kurmamız gerekir.
+                    # Ya da generate_autonomous_goal'u da dict döndürecek şekilde güncelleyebiliriz. Şimdilik basit tutalım.
+                    new_autonomous_goal_str = aybar.cognitive_system.generate_autonomous_goal(aybar.emotional_system.emotional_state)
+                    aybar.cognitive_system.set_new_goal(new_autonomous_goal_str, duration=20, current_turn=aybar.current_turn) # Varsayılan süre
+                    current_task_for_llm = aybar.cognitive_system.get_current_task(aybar.current_turn)
+                    if not current_task_for_llm: # Eğer hala görev yoksa (set_new_goal başarısız olduysa)
+                        current_task_for_llm = "Varoluşumu sorgulamak ve yeni hedefler keşfetmek." # Fallback
+                        last_observation = "Yeni bir hedef belirlemeye çalışırken bir sorun oluştu. Genel bir keşif moduna geçiyorum."
+                    else:
+                        last_observation = f"Yeni otonom hedef belirlendi: {current_task_for_llm}"
+                    print(f"💡 Aybar'ın Yeni Görevi: {current_task_for_llm}")
             
-            action_plan = aybar.run_thought_cycle(active_goal, last_observation, active_user_id, user_input, predicted_user_emotion)
+            action_plan = aybar.run_thought_cycle(current_task_for_llm, last_observation, active_user_id, user_input, predicted_user_emotion)
             user_input = None
             predicted_user_emotion = None # Her turdan sonra sıfırla
             last_observation = "Eylem tamamlandı. Yeni durum değerlendiriliyor."
 
+            # Prosedür kullanımını tespit etme ve güncelleme
+            if action_plan:
+                for item in action_plan:
+                    thought_text = item.get("thought", "")
+                    # LLM'in bir prosedürü kullandığını belirttiği formatı ara
+                    # Örneğin: "'PROC_NAME' prosedürünü uyguluyorum."
+                    proc_usage_match = re.search(r"['\"]([\w\s-]+)['\"]\s+prosedürünü\s+uyguluyorum", thought_text, re.IGNORECASE)
+                    if proc_usage_match:
+                        procedure_name_from_thought = proc_usage_match.group(1).strip()
+                        if procedure_name_from_thought:
+                            print(f"🔄 LLM tarafından prosedür kullanımı tespit edildi: '{procedure_name_from_thought}'")
+                            aybar.memory_system.update_procedure_usage_stats(procedure_name_from_thought, aybar.current_turn)
+
+                    # Alternatif olarak, eylem öğesinde özel bir anahtar olup olmadığını kontrol et
+                    # Bu, LLM'in doğrudan prosedür adını bir anahtarla döndürmesini gerektirir.
+                    # Örneğin: {"action": "...", "thought": "...", "invoked_procedure_name": "PROC_NAME"}
+                    invoked_proc_name = item.get("invoked_procedure_name")
+                    if invoked_proc_name and isinstance(invoked_proc_name, str):
+                        print(f"🔄 LLM tarafından prosedür kullanımı (özel anahtar ile) tespit edildi: '{invoked_proc_name}'")
+                        aybar.memory_system.update_procedure_usage_stats(invoked_proc_name, aybar.current_turn)
+
 
             if not action_plan:
                 last_observation = "Hiçbir eylem planı oluşturmadım, düşünmeye devam ediyorum."
-                print("🤖 Aybar: ... (Sessizlik)")
-                time.sleep(1)
+                logger.info("🤖 Aybar: ... (Sessizlik)")
+                time.sleep(1) # Keep 1s sleep if no action plan
                 continue
 
             for action_item in action_plan:
                 action_type = action_item.get("action")
-                thought = action_item.get("thought", "N/A")
-                print(f"🧠 Düşünce: {thought}\n⚡ Eylem: {action_type}")
+                thought_text = aybar._get_thought_text_from_action(action_item.get("thought"))
+                logger.info(f"🧠 Düşünce: {thought_text}\n⚡ Eylem: {action_type}")
                 
-                response_content = ""
+                response_content = "" # Stores the outcome string of the action
                 
                 if action_type == "CONTINUE_INTERNAL_MONOLOGUE":
-                    response_content = action_item.get("content", thought)
-                    print(f"🤖 Aybar (İç Monolog): {response_content}")
-                    last_observation = f"Şunu düşündüm: {response_content[:100]}..."
+                    response_content = action_item.get("content", thought_text)
+                    logger.info(f"🤖 Aybar (İç Monolog): {response_content}")
+                    # last_observation is not directly set by this, it's an internal monologue
                 
-                # DEĞİŞTİRİLDİ: Tanışma mantığı artık bu blok içinde
                 elif action_type == "ASK_USER":
-                    prompt_text = action_item.get("question", "Seni dinliyorum...")
-                    
-                    if action_item.get("use_voice", True) and aybar.speaker_system.engine:
-                        aybar.speaker_system.speak(prompt_text, aybar.emotional_system.emotional_state)
-                    
-                    user_response = input(f"🤖 Aybar: {prompt_text}\n👤 {active_user_id or 'Gözlemci'} > ")
-                    
-                    # YENİ: Zihin Teorisi - Kullanıcının cevabının duygusunu analiz et
-                    if user_response.strip():
-                        user_emotion_analysis = aybar.emotion_engine.analyze_emotional_content(user_response)
-                        if user_emotion_analysis:
-                            predicted_user_emotion = max(user_emotion_analysis, key=user_emotion_analysis.get)
-                            print(f"🕵️  Kullanıcı Duygu Tahmini: {predicted_user_emotion}")
-                    
-                    # Tanışma Protokolü
-                    if action_item.get("is_first_contact", False):
-                        active_user_id = user_response.strip() if user_response.strip() else "Yeni Dost"
-                        aybar.cognitive_system.get_or_create_social_relation(active_user_id)
-                        response_content = f"Tanıştığımıza memnun oldum, {active_user_id}."
-                        print(f"👋 Aybar artık sizi '{active_user_id}' olarak tanıyor.")
-                        user_input = response_content # Bir sonraki turda bu bilgiyle başlasın
-                        last_observation = f"'{active_user_id}' adlı yeni bir varlıkla tanıştım."
-                    else:
-                        # Normal Sohbet
-                        user_input = user_response if user_response.strip() else "(sessizlik)"
-                        last_observation = f"Kullanıcıya soru sordum ve '{user_input}' cevabını aldım."
-                        response_content = "Cevabını aldım, şimdi düşünüyorum."
-
+                    question_to_ask = action_item.get("question", "Seni dinliyorum...")
+                    response_content = tools.ask_user_via_file(question=question_to_ask, aybar_instance=aybar, thought=thought_text)
+                    # The tool returns a confirmation string, which is good for response_content
+                    logger.info(f"📤 {response_content}") # Log tool's confirmation
                 
-                # YENİ EKLENDİ: Döngü Kırma ve Sıfırlama Eylemi
                 elif action_type == "SUMMARIZE_AND_RESET":
-                    response_content = "Bir an... Düşüncelerimi toparlıyorum ve yeniden odaklanıyorum."
-                    print(f"🔄 {response_content}")
-                    active_goal = None # Hedefi sıfırlayarak yeni bir hedef üretmesini tetikle
-                    last_observation = "Bir düşünce döngüsüne girdiğimi fark ettim. Durumu özetleyip yeniden başlamam gerekiyor."
+                    response_content = tools.summarize_and_reset(aybar_instance=aybar, thought=thought_text)
+                    logger.info(f"🔄 {response_content}")
+                    active_goal = None # Reset active_goal for the main loop
 
-
-
-                # DEĞİŞTİRİLDİ: Artık 'NAVIGATE' eylemini dinliyor
-                elif action_type in ("Maps", "NAVIGATE"):
-                    url = action_item.get("url")
-                    if aybar.web_surfer_system.driver and url:
-                        aybar.web_surfer_system.navigate_to(url)
-                        page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
-                        last_observation = f"Sayfaya gidildi: {url}. İçerik: {page_text[:300]}... Elementler: {elements[:3]}"
-                    else:
-                        last_observation = "Web sörfçüsü aktif değil veya URL belirtilmedi, navigasyon başarısız."
-                
-                # YENİ VE GELİŞTİRİLMİŞ BLOK: WEB_SEARCH artık URL'leri de anlıyor
-                elif action_type == "WEB_SEARCH":
+                elif action_type == "Maps_OR_SEARCH":
                     query = action_item.get("query", "").strip()
-                    if not (aybar.web_surfer_system.driver and query):
-                        last_observation = "Web sörfçüsü aktif değil veya arama sorgusu/URL belirtilmedi."
+                    if not query:
+                        response_content = "Maps_OR_SEARCH eylemi için bir URL veya arama terimi belirtilmedi."
+                        logger.warning(response_content)
                         plan_executed_successfully = False
                     else:
-                        is_url = query.startswith("http://") or query.startswith("https://") or query.startswith("www.")
-                        
-                        if is_url:
-                            # Eğer bir URL ise, doğrudan o adrese git
-                            print(f"🧭 Belirtilen adrese gidiliyor: '{query}'")
-                            aybar.web_surfer_system.navigate_to(query)
-                            response_content = f"'{query}' adresine gittim."
-                        else:
-                            # Eğer bir arama terimi ise, Google'da arat
-                            print(f"🌐 İnternette araştırılıyor: '{query}'")
-                            aybar.web_surfer_system.navigate_to(f"https://www.google.com/search?q={requests.utils.quote(query)}")
-                            response_content = f"'{query}' için arama sonuçları sayfasındayım."
-                        
-                        time.sleep(3) # Sayfanın yüklenmesi için bekle
-                        page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
-                        last_observation = f"'{query}' eylemi sonrası sayfa durumu: {page_text[:300]}... Etkileşimli elementler: {elements[:3]}"
-
+                        response_content = tools.maps_or_search(query=query, aybar_instance=aybar, thought=thought_text)
+                        # CAPTCHA detection logic
+                        captcha_keywords = ["recaptcha", "i'm not a robot", "robot değilim", "sıra dışı bir trafik", "bilgisayar ağınızdan", "güvenlik kontrolü", "are you human", "algıladık", "trafik"]
+                        if isinstance(response_content, str) and (any(keyword in response_content.lower() for keyword in captcha_keywords) or "CAPTCHA" in response_content.upper()):
+                            if hasattr(aybar, 'web_surfer_system') and aybar.web_surfer_system.driver:
+                                aybar.is_waiting_for_human_captcha_help = True
+                                aybar.last_web_url_before_captcha = aybar.web_surfer_system.driver.current_url
+                                captcha_message = "Bir robot doğrulaması (CAPTCHA) ile karşılaştım. İnsan yardımı bekleniyor."
+                                response_content = captcha_message # Update response_content to reflect CAPTCHA
+                                aybar.speaker_system.speak("Bir robot doğrulamasıyla karşılaştım. Lütfen bu adımı benim için geçip hazır olduğunda 'devam et' veya sadece 'devam' yazar mısın?")
+                                logger.warning(f"🤖 CAPTCHA tespit edildi. URL: {aybar.last_web_url_before_captcha}. İnsan yardımı bekleniyor...")
+                                plan_executed_successfully = False
                 
-                elif action_type in ["WEB_CLICK", "WEB_TYPE"]:
-                    if aybar.web_surfer_system.driver:
-                        web_action_result = aybar.web_surfer_system.perform_web_action(action_item)
-                        page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
-                        last_observation = f"{web_action_result}. Sayfanın yeni durumu: {page_text[:300]}... Etkileşimli elementler: {elements[:3]}"
-                        response_content = "Web sayfasında bir eylem gerçekleştirdim."
+                elif action_type == "WEB_CLICK":
+                    target_xpath = action_item.get("target_xpath")
+                    if not target_xpath:
+                        response_content = "WEB_CLICK için target_xpath belirtilmedi."
+                        plan_executed_successfully = False
                     else:
-                        last_observation = "Web sörfçüsü aktif değil, web eylemi başarısız."
+                        response_content = tools.web_click(target_xpath=target_xpath, aybar_instance=aybar, thought=thought_text)
+                        if "Hata:" in response_content or "Error:" in response_content or "not available" in response_content:
+                            plan_executed_successfully = False
+                        else: # Add current page state to observation on success
+                            if hasattr(aybar, 'web_surfer_system') and aybar.web_surfer_system.driver:
+                                page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
+                                response_content += f". Sayfanın yeni durumu: {page_text[:200]}... Etkileşimli elementler: {elements[:2]}"
+
+
+                elif action_type == "WEB_TYPE":
+                    target_xpath = action_item.get("target_xpath")
+                    text_to_type = action_item.get("text")
+                    if not target_xpath or text_to_type is None: # text_to_type can be empty string
+                        response_content = "WEB_TYPE için target_xpath veya text belirtilmedi."
+                        plan_executed_successfully = False
+                    else:
+                        response_content = tools.web_type(target_xpath=target_xpath, text_to_type=text_to_type, aybar_instance=aybar, thought=thought_text)
+                        if "Hata:" in response_content or "Error:" in response_content or "not available" in response_content:
+                            plan_executed_successfully = False
+                        else: # Add current page state to observation on success
+                             if hasattr(aybar, 'web_surfer_system') and aybar.web_surfer_system.driver:
+                                page_text, elements = aybar.web_surfer_system.get_current_state_for_llm()
+                                response_content += f". Sayfanın yeni durumu: {page_text[:200]}... Etkileşimli elementler: {elements[:2]}"
 
                 elif action_type == "FINISH_GOAL":
-                    summary = action_item.get('summary', 'Hedef tamamlandı.')
-                    response_content = f"Hedefimi tamamladım. Özet: {summary}"
-                    print(f"🏁 {response_content}")
-                    active_goal = None
-                    last_observation = f"'{summary}' diyerek bir önceki hedefimi tamamladım. Şimdi yeni bir arayış içindeyim."
+                    summary = action_item.get('summary', 'Görev tamamlandı.')
+                    response_content = tools.finish_goal(summary=summary, aybar_instance=aybar, thought=thought_text)
+                    if not aybar.cognitive_system.main_goal:
+                        active_goal = None
+                    logger.info(f"🏁 {response_content}")
 
-                # DÜZELTİLDİ: Tüm eski araçları işleyen nihai blok
                 elif action_type == "USE_LEGACY_TOOL":
                     command = action_item.get("command", "")
+                    legacy_tool_thought = thought_text
                     
                     match = re.search(r"\[(\w+)(?::\s*(.*?))?\]", command.strip())
                     
@@ -2577,68 +3495,91 @@ if __name__ == "__main__":
                         tool_name, param_str = match.groups()
                         param_str = param_str.strip() if param_str else ""
                         
-                        print(f"🛠️  Araç Kullanımı: {tool_name}, Parametre: {param_str or 'Yok'}")
+                        logger.info(f"🛠️  USE_LEGACY_TOOL Kullanımı: {tool_name}, Parametre: {param_str or 'Yok'}, Düşünce: {legacy_tool_thought}")
 
                         try:
-                            # Parametre almayan basit araçlar
                             if tool_name == "EVOLVE":
                                 aybar.evolution_system.trigger_self_evolution(problem=param_str or None)
                                 response_content = "Deneysel bir evrim döngüsü başlatıyorum..."
-                            elif tool_name == "REFLECT":
+                            elif tool_name == "REFLECT": # Stays as internal Aybar method
                                 response_content = aybar.cognitive_system._execute_reflection(aybar, last_observation)
                             elif tool_name == "UPDATE_IDENTITY":
-                                response_content = aybar._update_identity()
-
-                            # Metin parametresi alan araçlar
-                            elif tool_name == "SEARCH":
-                                response_content = aybar._perform_internet_search(param_str) if param_str else "Arama için bir konu belirtilmedi."
+                                response_content = tools.update_identity(aybar_instance=aybar, thought=legacy_tool_thought)
                             elif tool_name == "KEYBOARD_TYPE":
-                                response_content = aybar.computer_control_system.keyboard_type(param_str) if param_str else "Yazmak için bir metin belirtilmedi."
+                                response_content = tools.keyboard_type(text_to_type=param_str, aybar_instance=aybar, thought=legacy_tool_thought)
                             
-                            # JSON parametresi alan araçlar
-                            elif tool_name in ["ANALYZE_MEMORY", "RUN_SIMULATION", "SET_GOAL", "CREATE", "REGULATE_EMOTION", "INTERACT", "META_REFLECT", "MOUSE_CLICK"]:
-                                params = json.loads(param_str)
+                            elif tool_name in ["ANALYZE_MEMORY", "RUN_SIMULATION", "SET_GOAL", "CREATE", "REGULATE_EMOTION", "INTERACT", "META_REFLECT", "MOUSE_CLICK", "SEE_SCREEN"]:
+                                params = {}
+                                if param_str:
+                                    try:
+                                        params = json.loads(param_str)
+                                    except json.JSONDecodeError:
+                                        response_content = f"'{tool_name}' için sağlanan JSON parametresi '{param_str}' geçersiz."
+                                        logger.error(response_content)
+                                        plan_executed_successfully = False
+                                        break # Stop processing this invalid legacy tool command
+
                                 if tool_name == "ANALYZE_MEMORY":
-                                    response_content = aybar._analyze_memory(params.get("query"))
+                                    response_content = tools.analyze_memory(query=params.get("query", ""), aybar_instance=aybar, thought=legacy_tool_thought)
                                 elif tool_name == "RUN_SIMULATION":
-                                    response_content = aybar._run_internal_simulation(params.get("scenario"))
+                                    response_content = tools.run_internal_simulation(scenario=params.get("scenario", ""), aybar_instance=aybar, thought=legacy_tool_thought)
                                 elif tool_name == "SET_GOAL":
-                                    aybar.cognitive_system.set_new_goal(params.get("goal"), params.get("steps", []), params.get("duration_turns", 10), aybar.current_turn)
-                                    response_content = "Yeni bir hedef belirledim."
+                                    goal_input_param = params.get("goal_input", params.get("goal"))
+                                    duration_param = params.get("duration_turns", params.get("duration", 20))
+                                    if goal_input_param:
+                                        aybar.cognitive_system.set_new_goal(goal_input_param, duration_param, aybar.current_turn)
+                                        response_content = f"Yeni hedef(ler) ayarlandı: {goal_input_param}"
+                                        active_goal = aybar.cognitive_system.get_current_task(aybar.current_turn)
+                                    else:
+                                        response_content = "SET_GOAL için 'goal_input' parametresi eksik."
                                 elif tool_name == "CREATE":
-                                    response_content = aybar._creative_generation(params.get("type", "text"), params.get("theme", "o anki hislerim"))
+                                    creation_type_param = params.get("type", "hikaye")
+                                    theme_param = params.get("theme", "o anki hislerim")
+                                    response_content = tools.creative_generation(creation_type=creation_type_param, theme=theme_param, aybar_instance=aybar, thought=legacy_tool_thought)
                                 elif tool_name == "REGULATE_EMOTION":
-                                    response_content = aybar._regulate_emotion(params.get("strategy", "calm_monologue"))
+                                    strategy_param = params.get("strategy", "calm_monologue")
+                                    response_content = tools.regulate_emotion(strategy=strategy_param, aybar_instance=aybar, thought=legacy_tool_thought)
                                 elif tool_name == "INTERACT":
-                                    response_content = aybar._handle_interaction(active_user_id, params.get("goal", "increase_familiarity"), params.get("method", "ask_general_question"))
+                                    response_content = tools.handle_interaction(user_id=active_user_id, goal=params.get("goal", "increase_familiarity"), method=params.get("method", "ask_general_question"), aybar_instance=aybar, thought=legacy_tool_thought)
                                 elif tool_name == "META_REFLECT":
-                                     response_content = aybar._perform_meta_reflection(params.get("turn_to_analyze"), params.get("thought_to_analyze"))
+                                     response_content = tools.perform_meta_reflection(turn_to_analyze=params.get("turn_to_analyze", aybar.current_turn -1), thought_to_analyze=params.get("thought_to_analyze", last_observation), aybar_instance=aybar, thought=legacy_tool_thought)
                                 elif tool_name == "MOUSE_CLICK":
-                                     response_content = aybar.computer_control_system.mouse_click(params.get("x"), params.get("y"), params.get("double", False))
+                                     response_content = tools.mouse_click(x=params.get("x"), y=params.get("y"), double_click=params.get("double", False), aybar_instance=aybar, thought=legacy_tool_thought)
+                                elif tool_name == "SEE_SCREEN":
+                                    question_for_vlm = params.get("question", "Ekranı genel olarak analiz et.")
+                                    response_content = tools.analyze_screen(question=question_for_vlm, aybar_instance=aybar, thought=legacy_tool_thought)
                             else:
                                 response_content = f"Bilinmeyen eski araç: {tool_name}"
-                        except (json.JSONDecodeError, TypeError):
-                            response_content = f"'{tool_name}' komutunun JSON parametreleri hatalı veya eksik."
-                        except Exception as e:
-                            response_content = f"'{tool_name}' aracı çalıştırılırken bir hata oluştu: {e}"
+                        except (json.JSONDecodeError, TypeError) as e_json_legacy:
+                            response_content = f"'{tool_name}' komutunun JSON parametreleri hatalı veya eksik: {e_json_legacy}. Parametre string: '{param_str}'"
+                            logger.error(response_content)
+                            plan_executed_successfully = False
+                        except Exception as e_legacy:
+                            response_content = f"'{tool_name}' aracı çalıştırılırken bir hata oluştu: {e_legacy}"
+                            logger.error(response_content, exc_info=True)
+                            plan_executed_successfully = False
                     
                     last_observation = f"'{command}' aracını kullandım. Sonuç: {response_content[:100]}..."
-
                 
-
-                # DEĞİŞTİRİLDİ: Bilinmeyen eylem için daha aktif hata yönetimi
-                else:
+                else: # Bilinmeyen eylem türü
                     response_content = f"Bilinmeyen bir eylem türü ({action_type}) denedim. Bu eylem planını iptal ediyorum."
-                    last_observation = response_content # YENİ: Hatayı bir sonraki tur için gözlem yap
-                    print(f"🤖 Aybar (Planlama Hatası): {response_content}")
-                    plan_executed_successfully = False # YENİ: Planın başarısız olduğunu işaretle
-                    break # YENİ: Hatalı planın geri kalanını çalıştırmayı durdur ve döngüden çık.
+                    logger.warning(f"🤖 Aybar (Planlama Hatası): {response_content}")
+                    plan_executed_successfully = False
+                    # last_observation will be set outside the loop based on the final response_content from the error
+                    break
 
-                if response_content and action_type not in ["CONTINUE_INTERNAL_MONOLOGUE"]:
-                    print(f"🤖 Aybar (Eylem Sonucu): {response_content}")
+                if response_content and action_type not in ["CONTINUE_INTERNAL_MONOLOGUE"]: # Log results of actions that produce external effect or info
+                    logger.info(f"🤖 Aybar (Eylem Sonucu): {response_content[:200]}...")
 
-            # DEĞİŞTİRİLDİ: Esnek bekleme süresi
-            time.sleep(0.5 if not plan_executed_successfully else 2)
+            if not plan_executed_successfully: # If any action failed, the loop breaks, use its response_content for observation
+                last_observation = response_content if response_content else "Bir eylem gerçekleştirilirken plan_executed_successfully False olarak ayarlandı, ancak response_content boştu."
+            elif not response_content and action_type == "CONTINUE_INTERNAL_MONOLOGUE": # If it was just a thought, observation doesn't change much
+                pass # last_observation remains "Eylem tamamlandı. Yeni durum değerlendiriliyor." or similar from before the loop
+            elif response_content: # For successful actions that generated response_content
+                last_observation = response_content[:300] + "..." if len(response_content) > 300 else response_content
+            # If response_content is empty and it wasn't a CONTINUE_INTERNAL_MONOLOGUE, last_observation retains its value from before the loop
+
+            time.sleep(0.5 if not plan_executed_successfully else 1)
 
     except KeyboardInterrupt:
         print("\n🚫 Simülasyon kullanıcı tarafından durduruldu.")

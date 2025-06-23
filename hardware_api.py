@@ -58,4 +58,4 @@ def capture_screen():
 
 if __name__ == '__main__':
     print("✅ Donanım Kontrol API'si http://localhost:5151 adresinde çalışıyor.")
-    app.run(host='0.0.0.0', port=5151)
+    app.run(host='127.0.0.1', port=5151)
