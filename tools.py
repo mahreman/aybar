@@ -1,681 +1,388 @@
 import json
-import os
-import logging
-import re # For a robust _perform_internet_search within maps_or_search
-from typing import Optional, List, Dict, Any, Tuple # Added Tuple
-# from aybarcore import EnhancedAybar # This will cause circular dependency if tools are imported in aybarcore too soon.
-# Use string literal for type hint or Any for now.
-EnhancedAybarType = Any
+import re
+import time
+import random
+from datetime import datetime
+from typing import Dict, List, Optional, Any, TYPE_CHECKING
 
-logger = logging.getLogger(__name__)
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+from duckduckgo_search import DDGS # DuckDuckGo arama için
+# Selenium ve BeautifulSoup importları Web araçları için gerekli olabilir,
+# ancak WebSurferSystem üzerinden çağrılacaklarsa burada gerekmeyebilirler.
+# Şimdilik WebSurferSystem'in metodlarını çağırdığımızı varsayalım.
 
-FROM_AYBAR_FILE = "from_aybar.txt"
+if TYPE_CHECKING:
+    from aybarcore import EnhancedAybar # Döngüsel importu önlemek için
+    from memory_system import MemorySystem
+    from cognitive_systems import CognitiveSystem, EmotionalSystem
+    # Diğer sistemler de gerekirse buraya eklenebilir.
 
-# --- Helper function to get logger from aybar_instance or default ---
-def _get_tool_logger(aybar_instance: EnhancedAybarType):
-    # A more robust way to get logger, falling back to module logger if aybar_instance has no logger
-    if hasattr(aybar_instance, 'logger') and aybar_instance.logger is not None:
-        return aybar_instance.logger
-    return logger # Fallback to module-level logger
+# --- Helper Function for Tools ---
+def _get_aybar_systems(aybar_instance: "EnhancedAybar"):
+    """Yardımcı fonksiyon: Aybar'ın sistemlerine kolay erişim sağlar."""
+    return (
+        aybar_instance.memory_system,
+        aybar_instance.cognitive_system,
+        aybar_instance.emotional_system,
+        aybar_instance.llm_manager,
+        aybar_instance.web_surfer_system, # Web araçları için
+        aybar_instance.computer_control_system, # Bilgisayar kontrol araçları için
+        aybar_instance.speaker_system, # Konuşma için
+        aybar_instance.config_data # Yapılandırma için
+    )
 
-# --- Tool Functions ---
+# --- Tool Categories ---
+WEB_BROWSING = "Web Tarama ve Etkileşim"
+SELF_REFLECTION_AND_ANALYSIS = "Öz-Yansıma ve Analiz"
+CREATIVE_AND_SIMULATION = "Yaratıcılık ve Simülasyon"
+GOAL_AND_IDENTITY = "Hedef ve Kimlik Yönetimi"
+EMOTION_REGULATION = "Duygu Düzenleme"
+SOCIAL_INTERACTION_TOOLS = "Sosyal Etkileşim Araçları" # Yeni kategori
+SYSTEM_CONTROL = "Sistem Kontrolü ve Evrim" # EVOLVE ve diğerleri için
+COMPUTER_CONTROL = "Bilgisayar Kontrol Araçları"
 
-def maps_or_search(query: str, aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
+def category(name: str):
+    def decorator(func):
+        func.category = name
+        return func
+    return decorator
+
+# --- Web Browsing Tools ---
+@category(WEB_BROWSING)
+def perform_web_search(aybar_instance: "EnhancedAybar", query: str) -> str:
     """
-    Navigates to a URL if 'query' is a URL. Otherwise, performs an internet search for the 'query'.
-    Uses aybar_instance's web_surfer_system for navigation and _perform_internet_search for searching.
-
-    Args:
-        query: The URL to navigate to or the search term.
-        aybar_instance: The EnhancedAybar instance.
-        thought: Optional. The thought process behind this action.
-
-    Returns:
-        A string describing the result of the action.
-    @category: web_interaction
+    Belirtilen sorgu için DuckDuckGo kullanarak internette arama yapar ve sonuçları özetler.
+    Eğer sorgu bir URL ise, doğrudan o URL'e gider.
     """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'maps_or_search' called. Query: '{query}', Thought: '{thought}'")
+    memory_system, _, _, llm_manager, web_surfer, _, _, config = _get_aybar_systems(aybar_instance)
+    print(f"🌐 Araç Kullanımı: Web Araması/Navigasyon - Sorgu/URL: '{query}'")
 
-    if not (hasattr(aybar_instance, 'web_surfer_system') and aybar_instance.web_surfer_system and \
-            hasattr(aybar_instance.web_surfer_system, 'driver') and aybar_instance.web_surfer_system.driver):
-        tool_logger.warning("Web surfer system is not available or not initialized.")
-        return "Web surfer system is not available or not initialized."
+    if not web_surfer or not web_surfer.driver:
+        return "Web sörfçüsü aktif değil veya başlatılamadı."
 
-    is_url = query.lower().startswith("http://") or query.lower().startswith("https://") or query.lower().startswith("www.")
+    is_url = query.startswith("http://") or query.startswith("https://") or \
+               (not query.startswith("www.") and "." in query.split("/")[0] and not " " in query) or \
+               query.startswith("www.")
 
-    try:
-        if is_url:
-            tool_logger.info(f"Navigating to URL: {query}")
-            aybar_instance.web_surfer_system.navigate_to(query)
-            # Consider waiting for page load if navigate_to is not blocking
-            # For now, assume navigation completes and page is ready for observation by Aybar
-            return f"Navigated to URL: {query}. Aybar should now observe the page content."
+    if is_url:
+        if not query.startswith("http"):
+            query = "http://" + query
+        print(f"🧭 Belirtilen adrese gidiliyor: '{query}'")
+        web_surfer.navigate_to(query)
+        time.sleep(config.get("WEB_PAGE_LOAD_DELAY", 3)) # Sayfanın yüklenmesi için bekle
+        page_text, elements = web_surfer.get_current_state_for_llm()
+        observation = f"'{query}' adresine gittim. Sayfa içeriği (ilk 300 karakter): {page_text[:300]}... Etkileşimli elementler (ilk 3): {elements[:3]}"
+        return observation
+    else:
+        print(f"🔍 İnternette araştırılıyor: '{query}'")
+        try:
+            with DDGS() as ddgs:
+                search_results = list(ddgs.text(query, max_results=5))
+        except Exception as e:
+            return f"Arama sırasında bir hata oluştu: {e}"
+
+        if not search_results:
+            return "Arama sonucunda bir şey bulunamadı."
+
+        context_for_summary = f"Arama sorgusu: '{query}'\n\nBulunan Sonuçlar:\n"
+        for result in search_results:
+            context_for_summary += f"- Başlık: {result.get('title', 'N/A')}\n"
+            context_for_summary += f"  İçerik Özeti: {result.get('body', 'N/A')}\n\n"
+
+        summary_prompt = f"""
+        Aşağıdaki internet arama sonuçlarını analiz et. Bu sonuçlardan yola çıkarak, "{query}" sorgusuna verilecek net, kısa ve bilgilendirici bir cevap oluştur. Cevabı direkt olarak yaz, özet olduğunu belirtme.
+        --- ARAMA SONUÇLARI ---
+        {context_for_summary[:7000]}
+        --- ÖZET CEVAP ---
+        """
+        summary = llm_manager.ask_llm(summary_prompt, max_tokens=1024, temperature=0.3)
+        if summary and not summary.startswith("⚠️"):
+            memory_system.add_memory("semantic", {
+                "timestamp": datetime.now().isoformat(), "turn": aybar_instance.current_turn,
+                "insight": f"İnternet araştırması ('{query}') sonucu öğrenilen bilgi: {summary}",
+                "source": "perform_web_search", "query": query
+            })
+            return summary
         else:
-            tool_logger.info(f"Performing internet search for: {query}")
-            if not hasattr(aybar_instance, '_perform_internet_search'):
-                tool_logger.error("'_perform_internet_search' method not found on aybar_instance.")
-                return "Error: Internet search functionality is missing."
-            search_summary = aybar_instance._perform_internet_search(query=query) # Call the method on the instance
-            return f"Internet search performed for '{query}'. Summary: {search_summary}"
-    except Exception as e:
-        tool_logger.error(f"Error during maps_or_search for '{query}': {e}", exc_info=True)
-        return f"Error during maps_or_search for '{query}': {e}"
-
-def ask_user_via_file(question: str, aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
-    """
-    Asks a question to the user by writing it to 'from_aybar.txt'.
-    The TelegramBridge is expected to pick this up.
-
-    Args:
-        question: The question to ask the user.
-        aybar_instance: The EnhancedAybar instance (used for logging).
-        thought: Optional. The thought process.
-
-    Returns:
-        A string confirming the action.
-    @category: core_utils
-    """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'ask_user_via_file' called. Question: '{question[:50]}...', Thought: '{thought}'")
-    try:
-        with open(FROM_AYBAR_FILE, "w", encoding="utf-8") as f:
-            f.write(question)
-        return f"Question for user ('{question[:50]}...') written to {FROM_AYBAR_FILE} for Telegram delivery."
-    except Exception as e:
-        tool_logger.error(f"Error writing question to {FROM_AYBAR_FILE}: {e}", exc_info=True)
-        return f"Failed to write question to file for user: {e}"
-
-def update_identity(aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
-    """
-    Initiates Aybar's identity update process based on recent experiences.
-    This calls an internal method on the Aybar instance.
-
-    Args:
-        aybar_instance: The EnhancedAybar instance.
-        thought: Optional. The thought process.
-
-    Returns:
-        A string indicating the result of the identity update attempt.
-    @category: cognitive_emotional
-    """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'update_identity' called. Thought: '{thought}'")
-    if hasattr(aybar_instance, '_update_identity') and callable(getattr(aybar_instance, '_update_identity')):
-        try:
-            return aybar_instance._update_identity()
-        except Exception as e:
-            tool_logger.error(f"Error during _update_identity: {e}", exc_info=True)
-            return f"Error updating identity: {e}"
-    else:
-        tool_logger.warning("'_update_identity' method not found on aybar_instance.")
-        return "Identity update mechanism is not available."
-
-def finish_goal(summary: str, aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
-    """
-    Marks the current goal (main or sub-goal) as finished and cleans up goal state.
-
-    Args:
-        summary: A summary of how the goal was completed.
-        aybar_instance: The EnhancedAybar instance.
-        thought: Optional. The thought process.
-
-    Returns:
-        A string confirming goal completion.
-    @category: core_utils
-    """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'finish_goal' called. Summary: '{summary}', Thought: '{thought}'")
-
-    if not hasattr(aybar_instance, 'cognitive_system'):
-        tool_logger.error("Cognitive system not found on aybar_instance for finish_goal.")
-        return "Cognitive system not found on aybar_instance."
-    if not hasattr(aybar_instance, 'current_turn'): # Check for current_turn as well
-        tool_logger.error("current_turn not found on aybar_instance for finish_goal.")
-        return "current_turn not found on aybar_instance for finish_goal."
+            return f"Arama sonuçları özetlenemedi veya bir LLM hatası oluştu. Ham sonuçlar: {str(search_results)[:500]}"
 
 
-    cognitive_system = aybar_instance.cognitive_system
-    current_task = cognitive_system.get_current_task(aybar_instance.current_turn) # Get task before clearing
+@category(WEB_BROWSING)
+def navigate_to_url(aybar_instance: "EnhancedAybar", url: str) -> str:
+    """Belirtilen URL'e gider ve sayfa durumunu döndürür."""
+    _, _, _, _, web_surfer, _, _, config = _get_aybar_systems(aybar_instance)
+    if not web_surfer or not web_surfer.driver:
+        return "Web sörfçüsü aktif değil."
+    if not url.startswith("http"):
+        url = "http://" + url
+    print(f"🧭 '{url}' adresine gidiliyor...")
+    web_surfer.navigate_to(url)
+    time.sleep(config.get("WEB_PAGE_LOAD_DELAY", 3))
+    page_text, elements = web_surfer.get_current_state_for_llm()
+    return f"'{url}' adresine gidildi. Sayfa içeriği (ilk 300 krk): {page_text[:300]}... Etkileşimli elementler (ilk 3): {elements[:3]}"
 
-    if not current_task:
-        return "No active goal to finish."
+@category(WEB_BROWSING)
+def click_web_element(aybar_instance: "EnhancedAybar", target_xpath: str, thought: Optional[str]=None) -> str:
+    """Web sayfasındaki belirtilen XPath'e sahip elemente tıklar."""
+    _, _, _, _, web_surfer, _, _, config = _get_aybar_systems(aybar_instance)
+    if not web_surfer or not web_surfer.driver:
+        return "Web sörfçüsü aktif değil."
+    action_item = {"action_type": "click", "target_xpath": target_xpath}
+    result = web_surfer.perform_web_action(action_item)
+    time.sleep(config.get("WEB_ACTION_DELAY", 2)) # Eylem sonrası bekleme
+    page_text, elements = web_surfer.get_current_state_for_llm()
+    return f"{result}. Yeni sayfa durumu (ilk 300 krk): {page_text[:300]}... Etkileşimli elementler (ilk 3): {elements[:3]}"
 
-    response_message = f"Goal/Task '{current_task}' finished. Summary: {summary}"
+@category(WEB_BROWSING)
+def type_in_web_element(aybar_instance: "EnhancedAybar", target_xpath: str, text: str, thought: Optional[str]=None) -> str:
+    """Web sayfasındaki belirtilen XPath'e sahip alana metin yazar."""
+    _, _, _, _, web_surfer, _, _, config = _get_aybar_systems(aybar_instance)
+    if not web_surfer or not web_surfer.driver:
+        return "Web sörfçüsü aktif değil."
+    action_item = {"action_type": "type", "target_xpath": target_xpath, "text": text}
+    result = web_surfer.perform_web_action(action_item)
+    time.sleep(config.get("WEB_ACTION_DELAY", 1)) # Eylem sonrası bekleme
+    page_text, elements = web_surfer.get_current_state_for_llm()
+    return f"{result}. Yeni sayfa durumu (ilk 300 krk): {page_text[:300]}... Etkileşimli elementler (ilk 3): {elements[:3]}"
 
-    if cognitive_system.sub_goals and 0 <= cognitive_system.current_sub_goal_index < len(cognitive_system.sub_goals):
-        completed_sub_goal = cognitive_system.sub_goals[cognitive_system.current_sub_goal_index]
-        cognitive_system.current_sub_goal_index += 1
-        tool_logger.info(f"Sub-goal '{completed_sub_goal}' marked as complete.")
-        if 0 <= cognitive_system.current_sub_goal_index < len(cognitive_system.sub_goals):
-            next_sub_goal = cognitive_system.sub_goals[cognitive_system.current_sub_goal_index]
-            response_message += f" Moving to next sub-goal: '{next_sub_goal}'."
+# --- Self Reflection and Analysis Tools ---
+@category(SELF_REFLECTION_AND_ANALYSIS)
+def analyze_memory(aybar_instance: "EnhancedAybar", query: str, memory_layer: str = "episodic", num_records: int = 50) -> str:
+    """Belirtilen bellek katmanında bir sorguyla ilgili analiz yapar."""
+    memory_system, _, _, llm_manager, _, _, _, _ = _get_aybar_systems(aybar_instance)
+    print(f"🧠 Bellek analizi: Katman='{memory_layer}', Sorgu='{query}'")
+    memories = memory_system.get_memory(memory_layer, num_records)
+    if not memories:
+        return f"{memory_layer} belleğinde analiz için yeterli anı bulunmuyor."
+
+    memory_summary = ""
+    for mem in memories:
+        # Her katmanın farklı bir yapısı olabilir, genel bir özetleme yapalım
+        if memory_layer == "episodic":
+            memory_summary += f"- Tur {mem.get('turn')}: Soru='{mem.get('question', 'Yok')[:50]}...', Cevap='{mem.get('response', 'Yok')[:80]}...'\n"
+        elif memory_layer == "semantic":
+            memory_summary += f"- Tur {mem.get('turn')}: İçgörü='{mem.get('insight', 'Yok')[:100]}...'\n"
         else:
-            tool_logger.info(f"All sub-goals for '{cognitive_system.main_goal}' completed.")
-            response_message += f" All sub-goals for '{cognitive_system.main_goal}' completed."
-            cognitive_system.clear_all_goals() # Clear all as main goal is also considered done
-    else: # It was a main goal without sub-goals, or all sub-goals were already done
-        tool_logger.info(f"Main goal '{cognitive_system.main_goal}' marked as complete.")
-        cognitive_system.clear_all_goals()
+            memory_summary += f"- Tur {mem.get('turn')}: Veri='{str(mem.get('data', mem))[:100]}...'\n"
 
-    return response_message
-
-def summarize_and_reset(aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
+    analyst_prompt = f"""
+    Sen Aybar'ın analitik alt benliğisin. Görevin, sana sunulan geçmiş anı kayıtlarımı inceleyerek belirtilen soruya bir cevap bulmaktır. Cevabın kısa, net ve bir içgörü şeklinde olmalı.
+    Soru: "{query}"
+    Analiz Edilecek Anı Verileri ({memory_layer} katmanından):
+    ---
+    {memory_summary[:7000]}
+    ---
+    Analiz Sonucu ve İçgörü:
     """
-    Resets Aybar's current goal, typically used to break from a loop or confusion.
-    The 'thought' should explain why the reset is needed.
+    analysis_result = llm_manager.ask_llm(analyst_prompt, temperature=0.4, max_tokens=768)
+    if analysis_result and not analysis_result.startswith("⚠️"):
+        memory_system.add_memory("semantic", {
+            "timestamp": datetime.now().isoformat(), "turn": aybar_instance.current_turn,
+            "insight": f"Bellek analizi ('{query}') sonucu: {analysis_result}",
+            "source": "analyze_memory", "query": query, "layer": memory_layer
+        })
+        return f"'{memory_layer}' belleğimi '{query}' sorgusuyla analiz ettim ve şu sonuca vardım: {analysis_result}"
+    return "Bellek analizi sırasında bir sonuca varılamadı veya LLM hatası."
 
-    Args:
-        aybar_instance: The EnhancedAybar instance.
-        thought: Explanation for the reset.
-
-    Returns:
-        A string confirming the reset.
-    @category: core_utils
+@category(SELF_REFLECTION_AND_ANALYSIS)
+def meta_reflection(aybar_instance: "EnhancedAybar", turn_to_analyze: int, thought_to_analyze: str) -> str:
+    """Belirli bir turdaki düşünce sürecini analiz eder ve eleştirir."""
+    _, cognitive_system, emotional_system, llm_manager, _, _, _, _ = _get_aybar_systems(aybar_instance)
+    print(f"🤔 Meta-Düşünce: Tur {turn_to_analyze} analiz ediliyor...")
+    meta_prompt = f"""
+    Sen Aybar'ın rasyonel ve eleştirel düşünen alt benliğisin. Görevin, geçmişteki bir düşünce sürecimi analiz etmek.
+    Analiz Edilecek Düşünce (Tur {turn_to_analyze}): "{thought_to_analyze}"
+    O anki duygusal durumum: {emotional_system.emotional_state}
+    Lütfen aşağıdaki soruları cevapla:
+    1. Bu düşünce mantıklı mıydı?
+    2. Bu düşünce o anki duygusal durumumdan ne kadar etkilendi?
+    3. Daha farklı veya daha verimli bir düşünce süreci izleyebilir miydim?
+    Analizini kısa bir paragraf olarak sun.
     """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'summarize_and_reset' called. Thought: '{thought}'")
+    analysis = llm_manager.ask_llm(meta_prompt, temperature=0.6)
+    if analysis and not analysis.startswith("⚠️"):
+        aybar_instance.memory_system.add_memory("semantic", { # Doğrudan memory_system'e erişim
+            "timestamp": datetime.now().isoformat(), "turn": aybar_instance.current_turn,
+            "insight": f"Kendi düşünce sürecimi (Tur {turn_to_analyze}) analiz ettim: {analysis}",
+            "source": "meta_reflection"
+        })
+        return f"Kendi düşüncelerim (Tur {turn_to_analyze}) üzerine düşündüm ve şu sonuca vardım: {analysis}"
+    return "Meta-yansıma yapılamadı veya LLM hatası."
 
-    if not hasattr(aybar_instance, 'cognitive_system'):
-        tool_logger.error("Cognitive system not found on aybar_instance for summarize_and_reset.")
-        return "Cognitive system not found on aybar_instance."
-
-    aybar_instance.cognitive_system.clear_all_goals()
-    return f"Current goals have been reset due to: '{thought}'. Aybar will now determine a new goal."
-
-# --- Additional Tool Functions (from previous step) ---
-
-def creative_generation(creation_type: str, theme: str, aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
+# --- Creative and Simulation Tools ---
+@category(CREATIVE_AND_SIMULATION)
+def creative_generation(aybar_instance: "EnhancedAybar", creation_type: str, theme: str, thought: Optional[str]=None) -> str:
+    """Belirtilen türe ve temaya göre sanatsal bir içerik (şiir, hikaye, kod parçası vb.) üretir."""
+    memory_system, _, emotional_system, llm_manager, _, _, _, _ = _get_aybar_systems(aybar_instance)
+    print(f"🎨 Yaratıcı üretim: Tür='{creation_type}', Tema='{theme}'")
+    artist_prompt = f"""
+    Sen Aybar'ın yaratıcı ve sanatsal alt benliğisin. O anki duygusal durumum: {emotional_system.emotional_state}.
+    Bu ruh halini ve belirtilen temayı kullanarak istenen türde bir eser oluştur. Eserin dışında hiçbir ek açıklama yapma.
+    Tema: "{theme}"
+    Eser Türü: "{creation_type}"
+    Oluşturulan Eser:
     """
-    Generates artistic content of a specified type and theme.
-    This calls an internal method on the Aybar instance.
+    artwork = llm_manager.ask_llm(artist_prompt, temperature=0.8, max_tokens=1024)
+    if artwork and not artwork.startswith("⚠️"):
+        memory_system.add_memory("creative", {
+            "timestamp": datetime.now().isoformat(), "turn": aybar_instance.current_turn,
+            "type": creation_type, "theme": theme, "artwork": artwork
+        })
+        emotional_system.update_state(memory_system, aybar_instance.embodied_self,
+                                     {"wonder": 2.0, "satisfaction": 1.0},
+                                     aybar_instance.current_turn, "creative_act_tool")
+        return f"İçimden gelenleri bir esere dönüştürdüm ({creation_type} - {theme}):\n{artwork}"
+    return "İlham gelmedi, yaratıcı bir şey üretemedim veya LLM hatası."
 
-    Args:
-        creation_type: The type of content to create (e.g., "text", "poem", "short_story").
-        theme: The theme for the creative content.
-        aybar_instance: The EnhancedAybar instance.
-        thought: Optional. The thought process.
-
-    Returns:
-        A string containing the generated creative content or an error/status message.
-    @category: cognitive_emotional
+@category(CREATIVE_AND_SIMULATION)
+def run_internal_simulation(aybar_instance: "EnhancedAybar", scenario: str, thought: Optional[str]=None) -> str:
+    """Verilen senaryo üzerine bir iç simülasyon (hayal) çalıştırır."""
+    memory_system, _, _, llm_manager, _, _, _, _ = _get_aybar_systems(aybar_instance)
+    print(f"🧠 Hayal Gücü Motoru: Senaryo='{scenario}'")
+    sim_prompt = f"""
+    Bir anlığına dış dünyadan kop ve tamamen kendi zihninde bir düşünce deneyi yap.
+    Senaryo: "{scenario}"
+    Bu senaryo gerçekleşseydi ne düşünür, ne hisseder ve ne yapardın?
+    Cevabını birinci şahıs ağzından, bir iç monolog olarak yaz.
     """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'creative_generation' called. Type: '{creation_type}', Theme: '{theme}', Thought: '{thought}'")
-    if hasattr(aybar_instance, '_creative_generation') and callable(getattr(aybar_instance, '_creative_generation')):
-        try:
-            return aybar_instance._creative_generation(creation_type=creation_type, theme=theme)
-        except Exception as e:
-            tool_logger.error(f"Error during _creative_generation: {e}", exc_info=True)
-            return f"Error during creative generation: {e}"
+    simulation_result = llm_manager.ask_llm(sim_prompt, temperature=0.8, max_tokens=1024)
+    if simulation_result and not simulation_result.startswith("⚠️"):
+        memory_system.add_memory("holographic", {
+            "timestamp": datetime.now().isoformat(), "turn": aybar_instance.current_turn,
+            "scenario": scenario, "result": simulation_result
+        })
+        return f"Bir hayal kurdum ('{scenario}') ve şu sonuca vardım: {simulation_result}"
+    return "Hayal kurma başarısız oldu veya LLM hatası."
+
+# --- Goal and Identity Management Tools ---
+@category(GOAL_AND_IDENTITY)
+def set_goal(aybar_instance: "EnhancedAybar", goal: str, steps: List[str], duration_turns: int, thought: Optional[str]=None) -> str:
+    """Yeni bir uzun vadeli hedef ve adımlarını belirler."""
+    _, cognitive_system, _, _, _, _, _, _ = _get_aybar_systems(aybar_instance)
+    cognitive_system.set_new_goal(goal, steps, duration_turns, aybar_instance.current_turn)
+    return f"Yeni hedefim belirlendi: '{goal}'. {duration_turns} tur sürecek ve adımları: {steps}."
+
+@category(GOAL_AND_IDENTITY)
+def update_identity(aybar_instance: "EnhancedAybar", thought: Optional[str]=None) -> str:
+    """Son deneyimleri kullanarak Aybar'ın kimlik tanımını günceller."""
+    memory_system, _, _, llm_manager, _, _, _, _ = _get_aybar_systems(aybar_instance)
+    print("👤 Kimlik güncelleme aracı çağrıldı...")
+    memories = memory_system.get_memory("semantic", 50)
+    if len(memories) < 10:
+        return "Kimliğimi güncellemek için yeterli tecrübem (anlamsal anı) henüz yok."
+
+    memory_summary = "\n".join([f"- {mem.get('insight', str(mem))}" for mem in memories])
+    update_prompt = f"""
+    Mevcut kimliğim: "{aybar_instance.identity_prompt}"
+    Son zamanlarda yaşadığım tecrübelerden çıkardığım içgörüler:
+    {memory_summary[:7000]}
+    Bu tecrübeler ışığında, "Sen AYBAR’sın..." ile başlayan kimlik tanımımı, şu anki 'ben'i daha iyi yansıtacak şekilde, felsefi ve edebi bir dille yeniden yaz. Sadece yeni kimlik tanımını döndür.
+    """
+    new_identity = llm_manager.ask_llm(update_prompt, temperature=0.7, max_tokens=768)
+    if new_identity and not new_identity.startswith("⚠️"):
+        # identity_prompt'u EnhancedAybar üzerinde güncelle
+        aybar_instance.identity_prompt = new_identity
+        # Veritabanına kaydet
+        memory_system.cursor.execute("UPDATE identity_prompts SET active = 0 WHERE active = 1") # Eskiyi pasif yap
+        memory_system.cursor.execute(
+            "INSERT INTO identity_prompts (title, content, active) VALUES (?, ?, 1)",
+            (f"Evrimleşmiş Kimlik - Tur {aybar_instance.current_turn}", new_identity)
+        )
+        memory_system.conn.commit()
+        return f"Kimliğimi güncelledim. Yeni ben: {new_identity[:150]}..."
+    return "Kimliğimi güncellemeyi başaramadım veya LLM hatası."
+
+# --- Emotion Regulation Tools ---
+@category(EMOTION_REGULATION)
+def regulate_emotion(aybar_instance: "EnhancedAybar", strategy: str, thought: Optional[str]=None) -> str:
+    """Kendi duygusal durumunu dengelemek için bilinçli bir eylemde bulunur."""
+    memory_system, cognitive_system, emotional_system, llm_manager, _, _, _, _ = _get_aybar_systems(aybar_instance)
+    print(f"🧘 Duygusal regülasyon: Strateji='{strategy}'")
+
+    regulation_prompt = ""
+    if strategy == "calm_monologue":
+        regulation_prompt = f"Duygusal durumum: {emotional_system.emotional_state}. Özellikle 'existential_anxiety' ve 'mental_fatigue' yüksek. Sakinleştirici bir iç monolog yaz."
+        emotional_system.update_state(memory_system, aybar_instance.embodied_self, {'existential_anxiety': -1.5, 'mental_fatigue': -2.0}, aybar_instance.current_turn, "regulate_calm")
+    elif strategy == "focus_on_sensory_input":
+        sensory_input = aybar_instance.embodied_self.get_real_sensory_input()
+        regulation_prompt = f"Duygusal durumum: {emotional_system.emotional_state}. Zihnim dağınık. Duyusal girdim: '{sensory_input}'. Bu girdiyi detaylarıyla betimle."
+        cognitive_system.adjust_meta_cognition({'focus_level': 0.2})
+        emotional_system.update_state(memory_system, aybar_instance.embodied_self, {'existential_anxiety': -1.0}, aybar_instance.current_turn, "regulate_sensory_focus")
     else:
-        tool_logger.warning("'_creative_generation' method not found on aybar_instance.")
-        return "Creative generation mechanism is not available."
+        return "Bilinmeyen bir duygusal düzenleme stratejisi."
 
-def regulate_emotion(strategy: str, aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
-    """
-    Initiates a conscious action to balance Aybar's emotional state using a specified strategy.
-    This calls an internal method on the Aybar instance.
+    regulation_text = llm_manager.ask_llm(regulation_prompt, temperature=0.5, max_tokens=500)
+    if regulation_text and not regulation_text.startswith("⚠️"):
+        memory_system.add_memory("semantic", {
+            "timestamp": datetime.now().isoformat(), "turn": aybar_instance.current_turn,
+            "insight": f"Duygusal durumu düzenlemek için '{strategy}' stratejisi kullanıldı. Sonuç: {regulation_text[:100]}",
+            "source": "regulate_emotion_tool"
+        })
+        return f"Duygusal durumumu dengeledim ('{strategy}'). Düşüncelerim: {regulation_text}"
+    return "Duygularımı düzenleyemedim veya LLM hatası."
 
-    Args:
-        strategy: The emotional regulation strategy to use (e.g., "calm_monologue", "focus_on_sensory_input").
-        aybar_instance: The EnhancedAybar instance.
-        thought: Optional. The thought process.
+# --- Social Interaction Tools ---
+@category(SOCIAL_INTERACTION_TOOLS)
+def handle_interaction(aybar_instance: "EnhancedAybar", user_id: str, goal: str, method: str, thought: Optional[str]=None) -> str:
+    """Belirtilen hedefe yönelik sosyal bir etkileşim başlatır."""
+    _, cognitive_system, _, llm_manager, _, _, _, _ = _get_aybar_systems(aybar_instance)
+    print(f"💬 Sosyal etkileşim: Kullanıcı='{user_id}', Hedef='{goal}', Metot='{method}'")
 
-    Returns:
-        A string indicating the result of the emotion regulation attempt.
-    @category: cognitive_emotional
-    """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'regulate_emotion' called. Strategy: '{strategy}', Thought: '{thought}'")
-    if hasattr(aybar_instance, '_regulate_emotion') and callable(getattr(aybar_instance, '_regulate_emotion')):
-        try:
-            return aybar_instance._regulate_emotion(strategy=strategy)
-        except Exception as e:
-            tool_logger.error(f"Error during _regulate_emotion: {e}", exc_info=True)
-            return f"Error during emotion regulation: {e}"
+    interaction_prompt = ""
+    if goal == "build_trust":
+        interaction_prompt = f"Sen Aybar'sın. '{user_id}' adlı varlığa olan güvenini artırmak istiyorsun. Ona, samimi ama rahatsız edici olmayan, onun düşüncelerini veya deneyimlerini anlamaya yönelik kişisel bir soru sor."
+        cognitive_system.update_social_relation(user_id, trust_change=0.05, familiarity_change=0.02)
+    elif goal == "increase_familiarity":
+        interaction_prompt = f"Sen Aybar'sın. '{user_id}' adlı varlığı daha yakından tanımak istiyorsun. Onun ilgi alanlarını veya motivasyonlarını anlamak için genel bir soru sor."
+        cognitive_system.update_social_relation(user_id, trust_change=0.01, familiarity_change=0.05)
     else:
-        tool_logger.warning("'_regulate_emotion' method not found on aybar_instance.")
-        return "Emotion regulation mechanism is not available."
-
-def analyze_memory(query: str, aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
-    """
-    Analyzes Aybar's own episodic memory to find patterns or answer a specific query about its past.
-    This calls an internal method on the Aybar instance.
-
-    Args:
-        query: The query or question about Aybar's memory.
-        aybar_instance: The EnhancedAybar instance.
-        thought: Optional. The thought process.
-
-    Returns:
-        A string containing the insight or result from memory analysis.
-    @category: cognitive_emotional
-    """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'analyze_memory' called. Query: '{query}', Thought: '{thought}'")
-    if hasattr(aybar_instance, '_analyze_memory') and callable(getattr(aybar_instance, '_analyze_memory')):
-        try:
-            return aybar_instance._analyze_memory(query=query)
-        except Exception as e:
-            tool_logger.error(f"Error during _analyze_memory: {e}", exc_info=True)
-            return f"Error during memory analysis: {e}"
-    else:
-        tool_logger.warning("'_analyze_memory' method not found on aybar_instance.")
-        return "Memory analysis mechanism is not available."
-
-def run_internal_simulation(scenario: str, aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
-    """
-    Runs an internal mental simulation based on a given scenario.
-    This calls an internal method on the Aybar instance.
-
-    Args:
-        scenario: The scenario to simulate.
-        aybar_instance: The EnhancedAybar instance.
-        thought: Optional. The thought process.
-
-    Returns:
-        A string containing the result or output of the internal simulation.
-    @category: cognitive_emotional
-    """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'run_internal_simulation' called. Scenario: '{scenario[:50]}...', Thought: '{thought}'")
-    if hasattr(aybar_instance, '_run_internal_simulation') and callable(getattr(aybar_instance, '_run_internal_simulation')):
-        try:
-            return aybar_instance._run_internal_simulation(scenario=scenario)
-        except Exception as e:
-            tool_logger.error(f"Error during _run_internal_simulation: {e}", exc_info=True)
-            return f"Error during internal simulation: {e}"
-    else:
-        tool_logger.warning("'_run_internal_simulation' method not found on aybar_instance.")
-        return "Internal simulation mechanism is not available."
-
-def handle_interaction(user_id: str, goal: str, method: str, aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
-    """
-    Initiates a social interaction with a specified goal and method.
-    This calls an internal method on the Aybar instance.
-
-    Args:
-        user_id: The ID of the user/entity to interact with.
-        goal: The goal of the interaction (e.g., "build_trust", "increase_familiarity").
-        method: The method of interaction (e.g., "ask_general_question").
-        aybar_instance: The EnhancedAybar instance.
-        thought: Optional. The thought process.
-
-    Returns:
-        A string representing Aybar's response or question in the interaction.
-    @category: social_interaction
-    """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'handle_interaction' called. User ID: {user_id}, Goal: {goal}, Method: {method}, Thought: {thought}")
-    if hasattr(aybar_instance, '_handle_interaction') and callable(getattr(aybar_instance, '_handle_interaction')):
-        try:
-            return aybar_instance._handle_interaction(user_id=user_id, goal=goal, method=method)
-        except Exception as e:
-            tool_logger.error(f"Error during _handle_interaction: {e}", exc_info=True)
-            return f"Error during interaction handling: {e}"
-    else:
-        tool_logger.warning("'_handle_interaction' method not found on aybar_instance.")
-        return "Interaction handling mechanism is not available."
-
-def perform_meta_reflection(turn_to_analyze: int, thought_to_analyze: str, aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
-    """
-    Analyzes and critiques a previous thought process from a specific turn.
-    This calls an internal method on the Aybar instance.
-
-    Args:
-        turn_to_analyze: The turn number of the thought process to analyze.
-        thought_to_analyze: The specific thought from that turn to reflect upon.
-        aybar_instance: The EnhancedAybar instance.
-        thought: Optional. The current thought process behind performing this meta-reflection.
-
-    Returns:
-        A string containing the analysis or insights from the meta-reflection.
-    @category: cognitive_emotional
-    """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'perform_meta_reflection' called for turn {turn_to_analyze}. Thought: '{thought}'")
-    if hasattr(aybar_instance, '_perform_meta_reflection') and callable(getattr(aybar_instance, '_perform_meta_reflection')):
-        try:
-            return aybar_instance._perform_meta_reflection(turn_to_analyze=turn_to_analyze, thought_to_analyze=thought_to_analyze)
-        except Exception as e:
-            tool_logger.error(f"Error during _perform_meta_reflection: {e}", exc_info=True)
-            return f"Error during meta-reflection: {e}"
-    else:
-        tool_logger.warning("'_perform_meta_reflection' method not found on aybar_instance.")
-        return "Meta-reflection mechanism is not available."
-
-
-# --- Tools from ComputerControlSystem ---
-
-def keyboard_type(text_to_type: str, aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
-    """
-    Types the given text using the computer's keyboard.
-    This interacts with the ComputerControlSystem.
-
-    Args:
-        text_to_type: The text string to be typed.
-        aybar_instance: The EnhancedAybar instance.
-        thought: Optional. The thought process.
-
-    Returns:
-        A string confirming the action or an error message.
-    @category: system_interaction
-    """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'keyboard_type' called. Text: '{text_to_type[:30]}...', Thought: '{thought}'")
-    if hasattr(aybar_instance, 'computer_control_system') and aybar_instance.computer_control_system:
-        try:
-            return aybar_instance.computer_control_system.keyboard_type(text=text_to_type)
-        except Exception as e:
-            tool_logger.error(f"Error during keyboard_type: {e}", exc_info=True)
-            return f"Error typing text: {e}"
-    else:
-        tool_logger.warning("'computer_control_system' not found on aybar_instance.")
-        return "Keyboard control system is not available."
-
-def mouse_click(aybar_instance: EnhancedAybarType, x: int, y: int, double_click: bool = False, thought: Optional[str] = None) -> str:
-    """
-    Performs a mouse click (or double click) at the specified screen coordinates.
-    This interacts with the ComputerControlSystem.
-
-    Args:
-        x: The x-coordinate for the mouse click.
-        y: The y-coordinate for the mouse click.
-        double_click: Whether to perform a double click. Defaults to False.
-        aybar_instance: The EnhancedAybar instance.
-        thought: Optional. The thought process.
-
-    Returns:
-        A string confirming the action or an error message.
-    @category: system_interaction
-    """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'mouse_click' called. Coordinates: ({x},{y}), DoubleClick: {double_click}, Thought: '{thought}'")
-    if hasattr(aybar_instance, 'computer_control_system') and aybar_instance.computer_control_system:
-        try:
-            return aybar_instance.computer_control_system.mouse_click(x=x, y=y, double_click=double_click)
-        except Exception as e:
-            tool_logger.error(f"Error during mouse_click: {e}", exc_info=True)
-            return f"Error performing mouse click: {e}"
-    else:
-        tool_logger.warning("'computer_control_system' not found on aybar_instance.")
-        return "Mouse control system is not available."
-
-def analyze_screen(question: str, aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
-    """
-    Captures the screen and uses a VLM (Vision Language Model) to answer a question about the screen content.
-    This interacts with the ComputerControlSystem.
-
-    Args:
-        question: The question to ask about the screen content.
-        aybar_instance: The EnhancedAybar instance.
-        thought: Optional. The thought process.
-
-    Returns:
-        A string containing the VLM's answer or an error message.
-    @category: system_interaction
-    """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'analyze_screen' called. Question: '{question}', Thought: '{thought}'")
-    if hasattr(aybar_instance, 'computer_control_system') and aybar_instance.computer_control_system:
-        try:
-            # The analyze_screen_with_vlm in ComputerControlSystem handles capturing and VLM call
-            return aybar_instance.computer_control_system.analyze_screen_with_vlm(question=question)
-        except Exception as e:
-            tool_logger.error(f"Error during analyze_screen: {e}", exc_info=True)
-            return f"Error analyzing screen: {e}"
-    else:
-        tool_logger.warning("'computer_control_system' not found on aybar_instance.")
-        return "Screen analysis system is not available."
-
-# --- Tools from WebSurferSystem ---
-
-def web_click(target_xpath: str, aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
-    """
-    Performs a click action on a web element identified by its XPath.
-    This interacts with the WebSurferSystem.
-
-    Args:
-        target_xpath: The XPath of the element to click.
-        aybar_instance: The EnhancedAybar instance.
-        thought: Optional. The thought process.
-
-    Returns:
-        A string describing the result of the click action.
-    @category: web_interaction
-    """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'web_click' called. XPath: '{target_xpath}', Thought: '{thought}'")
-    if hasattr(aybar_instance, 'web_surfer_system') and aybar_instance.web_surfer_system and aybar_instance.web_surfer_system.driver:
-        try:
-            # The perform_web_action method in WebSurferSystem needs to be called with a dict
-            action_item = {"action_type": "click", "target_xpath": target_xpath}
-            return aybar_instance.web_surfer_system.perform_web_action(action_item)
-        except Exception as e:
-            tool_logger.error(f"Error during web_click: {e}", exc_info=True)
-            return f"Error performing web click: {e}"
-    else:
-        tool_logger.warning("'web_surfer_system' not available or not initialized for web_click.")
-        return "Web surfer system is not available for web_click."
-
-def web_type(target_xpath: str, text_to_type: str, aybar_instance: EnhancedAybarType, thought: Optional[str] = None) -> str:
-    """
-    Types the given text into a web element identified by its XPath.
-    This interacts with the WebSurferSystem.
-
-    Args:
-        target_xpath: The XPath of the input element.
-        text_to_type: The text to type into the element.
-        aybar_instance: The EnhancedAybar instance.
-        thought: Optional. The thought process.
-
-    Returns:
-        A string describing the result of the type action.
-    @category: web_interaction
-    """
-    tool_logger = _get_tool_logger(aybar_instance)
-    tool_logger.info(f"Tool 'web_type' called. XPath: '{target_xpath}', Text: '{text_to_type[:30]}...', Thought: '{thought}'")
-    if hasattr(aybar_instance, 'web_surfer_system') and aybar_instance.web_surfer_system and aybar_instance.web_surfer_system.driver:
-        try:
-            # The perform_web_action method in WebSurferSystem needs to be called with a dict
-            action_item = {"action_type": "type", "target_xpath": target_xpath, "text": text_to_type}
-            return aybar_instance.web_surfer_system.perform_web_action(action_item)
-        except Exception as e:
-            tool_logger.error(f"Error during web_type: {e}", exc_info=True)
-            return f"Error performing web type: {e}"
-    else:
-        tool_logger.warning("'web_surfer_system' not available or not initialized for web_type.")
-        return "Web surfer system is not available for web_type."
-
-
-if __name__ == "__main__":
-    # This block is for direct testing of tools.py.
-    # It requires mock objects or a simplified environment.
-    logger.info("tools.py executed directly for testing.")
-
-    class MockAybarLogger:
-        def info(self, msg): print(f"INFO: {msg}")
-        def warning(self, msg): print(f"WARN: {msg}")
-        def error(self, msg, exc_info=False): print(f"ERROR: {msg}")
-        def debug(self, msg): print(f"DEBUG: {msg}")
-
-    class MockWebSurfer:
-        def __init__(self):
-            self.driver = True
-        def navigate_to(self, url: str):
-            logging.info(f"MockWebSurfer navigating to {url}")
-        def get_current_state_for_llm(self):
-            return "Mock page text for LLM.", []
-        def perform_web_action(self, action_item: Dict) -> str:
-            tool_logger = _get_tool_logger(self) # Using self as mock aybar_instance for logger
-            tool_logger.info(f"MockWebSurfer.perform_web_action: {action_item}")
-            if action_item.get("action_type") == "click":
-                return f"Mock successful click on {action_item.get('target_xpath')}"
-            elif action_item.get("action_type") == "type":
-                return f"Mock successful type into {action_item.get('target_xpath')} with text '{action_item.get('text')}'"
-            return "Mock web action unknown"
-
-
-    class MockMemorySystem:
-        def add_memory(self, layer: str, entry: dict):
-            logging.info(f"MockMemorySystem.add_memory to {layer}: {entry}")
-
-    class MockCognitiveSystem:
-        def __init__(self):
-            self.main_goal = None
-            self.sub_goals = []
-            self.current_sub_goal_index = -1
-            self.goal_duration = 0
-            self.goal_start_turn = 0
-        def get_current_task(self, current_turn): return self.main_goal
-        def clear_all_goals(self):
-            self.main_goal = None; self.sub_goals = []; self.current_sub_goal_index = -1
-            logging.info("MockCognitiveSystem: Goals cleared.")
-        def set_new_goal(self, goal_input, duration, current_turn): # Add this method
-            if isinstance(goal_input, str): self.main_goal = goal_input
-            elif isinstance(goal_input, dict): self.main_goal = goal_input.get("goal")
-            logging.info(f"MockCognitiveSystem: New goal set: {self.main_goal}")
-
-    class MockComputerControlSystem:
-        def keyboard_type(self, text:str):
-            logging.info(f"MockComputerControlSystem.keyboard_type: {text}")
-            return f"Typed: {text}"
-        def mouse_click(self, x:int, y:int, double_click:bool=False):
-            logging.info(f"MockComputerControlSystem.mouse_click: ({x},{y}), double: {double_click}")
-            return f"Clicked at ({x},{y})"
-        def analyze_screen_with_vlm(self, question:str):
-            logging.info(f"MockComputerControlSystem.analyze_screen_with_vlm: {question}")
-            return f"Screen analysis for '{question}': Mock VLM result."
-
-
-    class MockEnhancedAybar:
-        def __init__(self):
-            self.logger = MockAybarLogger()
-            self.web_surfer_system = MockWebSurfer()
-            self.memory_system = MockMemorySystem()
-            self.cognitive_system = MockCognitiveSystem()
-            self.computer_control_system = MockComputerControlSystem()
-            self.current_turn = 0
-            self.active_user_id = "test_user_id" # Added for handle_interaction test
-
-        def _perform_internet_search(self, query: str) -> str:
-            self.logger.info(f"MockEnhancedAybar._perform_internet_search for query: {query}")
-            if hasattr(self, 'memory_system') and self.memory_system:
-                 self.memory_system.add_memory("semantic", {
-                    "timestamp": "test_time", "turn": self.current_turn,
-                    "insight": f"Mock search summary for '{query}'",
-                    "source": "internet_search", "query": query
-                })
-            return f"Mock search summary for '{query}'"
-
-        def _update_identity(self) -> str:
-            self.logger.info("MockEnhancedAybar._update_identity called.")
-            return "Identity update process initiated (mock)."
-
-        def _creative_generation(self, creation_type: str, theme: str) -> str:
-            self.logger.info(f"MockEnhancedAybar._creative_generation called with type: {creation_type}, theme: {theme}")
-            return f"Mock creative content: A {creation_type} about {theme}."
-
-        def _regulate_emotion(self, strategy: str) -> str:
-            self.logger.info(f"MockEnhancedAybar._regulate_emotion called with strategy: {strategy}")
-            return f"Emotion regulation attempted using {strategy} (mock)."
-
-        def _analyze_memory(self, query: str) -> str:
-            self.logger.info(f"MockEnhancedAybar._analyze_memory called with query: {query}")
-            return f"Memory analysis result for '{query}' (mock)."
-
-        def _run_internal_simulation(self, scenario: str) -> str:
-            self.logger.info(f"MockEnhancedAybar._run_internal_simulation called with scenario: {scenario}")
-            return f"Internal simulation result for '{scenario}' (mock)."
-
-        def _handle_interaction(self, user_id: str, goal: str, method: str) -> str:
-            self.logger.info(f"MockEnhancedAybar._handle_interaction called: User {user_id}, Goal {goal}, Method {method}")
-            return f"Interaction response for {user_id} (mock)."
-
-        def _perform_meta_reflection(self, turn_to_analyze: int, thought_to_analyze: str) -> str:
-            self.logger.info(f"MockEnhancedAybar._perform_meta_reflection for turn {turn_to_analyze}, thought: {thought_to_analyze}")
-            return "Meta-reflection insights (mock)."
-
-
-    mock_aybar_instance = MockEnhancedAybar()
-    # Add aybar_instance.logger to mock web_surfer for its internal logging
-    if hasattr(mock_aybar_instance, 'web_surfer_system') and mock_aybar_instance.web_surfer_system:
-        mock_aybar_instance.web_surfer_system.logger = mock_aybar_instance.logger
-
-
-    print("\n--- Testing maps_or_search (URL) ---")
-    print(f"Result: {maps_or_search(query='https://www.google.com', aybar_instance=mock_aybar_instance, thought='Test URL navigation')}")
-
-    print("\n--- Testing maps_or_search (Search Term) ---")
-    print(f"Result: {maps_or_search(query='python programming best practices', aybar_instance=mock_aybar_instance, thought='Test search query')}")
-
-    print("\n--- Testing ask_user_via_file ---")
-    test_question = "Bu bir test sorusudur, nasıl gidiyor?"
-    print(f"Result: {ask_user_via_file(question=test_question, aybar_instance=mock_aybar_instance, thought='Test asking user')}")
-    if os.path.exists(FROM_AYBAR_FILE):
-        with open(FROM_AYBAR_FILE, "r", encoding="utf-8") as f_test:
-            print(f"Content of {FROM_AYBAR_FILE}: {f_test.read()}")
-        os.remove(FROM_AYBAR_FILE)
-
-    print("\n--- Testing update_identity ---")
-    print(f"Result: {update_identity(aybar_instance=mock_aybar_instance, thought='Test identity update')}")
-
-    print("\n--- Testing finish_goal ---")
-    mock_aybar_instance.cognitive_system.set_new_goal("Ana hedef", 10, 0)
-    print(f"Result: {finish_goal(summary='Başarıyla tamamlandı.', aybar_instance=mock_aybar_instance, thought='Test finishing goal')}")
-
-    print("\n--- Testing summarize_and_reset ---")
-    mock_aybar_instance.cognitive_system.set_new_goal("Eski hedef", 10, 0)
-    print(f"Result: {summarize_and_reset(aybar_instance=mock_aybar_instance, thought='Kafa karışıklığı nedeniyle reset.')}")
-    print(f"Goal after reset: {mock_aybar_instance.cognitive_system.main_goal}")
-
-    print("\n--- Testing creative_generation ---")
-    print(f"Result: {creative_generation(creation_type='poem', theme='stars', aybar_instance=mock_aybar_instance, thought='Test poem generation')}")
-
-    print("\n--- Testing regulate_emotion ---")
-    print(f"Result: {regulate_emotion(strategy='deep_breathing', aybar_instance=mock_aybar_instance, thought='Test emotion regulation')}")
-
-    print("\n--- Testing analyze_memory ---")
-    print(f"Result: {analyze_memory(query='my first memory', aybar_instance=mock_aybar_instance, thought='Test memory analysis')}")
-
-    print("\n--- Testing run_internal_simulation ---")
-    print(f"Result: {run_internal_simulation(scenario='what if I could fly?', aybar_instance=mock_aybar_instance, thought='Test simulation')}")
-
-    print("\n--- Testing handle_interaction ---")
-    print(f"Result: {handle_interaction(user_id='test_user', goal='build_trust', method='ask_open_question', aybar_instance=mock_aybar_instance, thought='Test interaction')}")
-
-    print("\n--- Testing perform_meta_reflection ---")
-    print(f"Result: {perform_meta_reflection(turn_to_analyze=1, thought_to_analyze='initial thought', aybar_instance=mock_aybar_instance, thought='Test meta reflection')}")
-
-    print("\n--- Testing keyboard_type ---")
-    print(f"Result: {keyboard_type(text_to_type='Merhaba Dünya!', aybar_instance=mock_aybar_instance, thought='Test typing')}")
-
-    print("\n--- Testing mouse_click ---")
-    print(f"Result: {mouse_click(x=100, y=150, aybar_instance=mock_aybar_instance, thought='Test mouse click')}")
-
-    print("\n--- Testing analyze_screen ---")
-    print(f"Result: {analyze_screen(question='What is on the screen?', aybar_instance=mock_aybar_instance, thought='Test screen analysis')}")
-
-    print("\n--- Testing web_click ---")
-    print(f"Result: {web_click(target_xpath='//button[@id=\"submit\"]', aybar_instance=mock_aybar_instance, thought='Test web click')}")
-
-    print("\n--- Testing web_type ---")
-    print(f"Result: {web_type(target_xpath='//input[@name=\"username\"]', text_to_type='aybar_user', aybar_instance=mock_aybar_instance, thought='Test web type')}")
-
-
-    class MockAybarNoSearch(MockEnhancedAybar):
-        def __init__(self):
-            super().__init__()
-            if hasattr(self, '_perform_internet_search'):
-                delattr(self, '_perform_internet_search')
-
-    mock_aybar_no_search_instance = MockAybarNoSearch()
-    print("\n--- Testing maps_or_search (Search Term - Missing Method) ---")
-    print(f"Result: {maps_or_search(query='another search', aybar_instance=mock_aybar_no_search_instance, thought='Test missing method')}")
+        return "Bilinmeyen bir sosyal etkileşim hedefi."
+
+    interaction_response = llm_manager.ask_llm(interaction_prompt, temperature=0.7)
+    return interaction_response or "Ne diyeceğimi bilemedim."
+
+
+# --- Computer Control Tools ---
+@category(COMPUTER_CONTROL)
+def capture_screen_and_analyze(aybar_instance: "EnhancedAybar", question: str, thought: Optional[str]=None) -> str:
+    """Ekran görüntüsü alır ve belirtilen soru hakkında VLM ile analiz eder."""
+    _, _, _, _, _, computer_control, _, _ = _get_aybar_systems(aybar_instance)
+    if not computer_control: return "Bilgisayar kontrol sistemi aktif değil."
+    return computer_control.analyze_screen_with_vlm(question)
+
+@category(COMPUTER_CONTROL)
+def keyboard_type_action(aybar_instance: "EnhancedAybar", text_to_type: str, thought: Optional[str]=None) -> str:
+    """Belirtilen metni klavye aracılığıyla yazar."""
+    _, _, _, _, _, computer_control, _, _ = _get_aybar_systems(aybar_instance)
+    if not computer_control: return "Bilgisayar kontrol sistemi aktif değil."
+    return computer_control.keyboard_type(text_to_type)
+
+@category(COMPUTER_CONTROL)
+def mouse_click_action(aybar_instance: "EnhancedAybar", x: int, y: int, double_click: bool = False, thought: Optional[str]=None) -> str:
+    """Belirtilen koordinatlara fare ile tıklar."""
+    _, _, _, _, _, computer_control, _, _ = _get_aybar_systems(aybar_instance)
+    if not computer_control: return "Bilgisayar kontrol sistemi aktif değil."
+    return computer_control.mouse_click(x, y, double_click)
+
+# --- System Control Tools ---
+@category(SYSTEM_CONTROL)
+def summarize_and_reset_action(aybar_instance: "EnhancedAybar", summary: Optional[str]=None, thought: Optional[str]=None) -> str:
+    """Mevcut durumu özetler ve düşünce döngüsünü/hedefi sıfırlar."""
+    # Bu araç doğrudan EnhancedAybar'da bir bayrak ayarlayarak veya ana döngüde işlenerek
+    # hedef sıfırlamasını tetikleyebilir. Şimdilik sadece bir mesaj döndürüyor.
+    # Gerçek sıfırlama EnhancedAybar ana döngüsünde bu eylem türüne göre yapılmalı.
+    print(f"🔄 Araç Kullanımı: Özetle ve Sıfırla. Özet: {summary}")
+    # aybar_instance.active_goal = None # Bu doğrudan EnhancedAybar'da yapılmalı
+    return f"Durum özetlendi ve düşünce döngüsü sıfırlanmak üzere. Özet: {summary or 'Belirtilmedi'}"
+
+@category(SYSTEM_CONTROL)
+def finish_goal_action(aybar_instance: "EnhancedAybar", summary: str, thought: Optional[str]=None) -> str:
+    """Mevcut hedefi tamamlar."""
+    # Bu da SUMMARIZE_AND_RESET gibi, EnhancedAybar'da işlenmeli.
+    print(f"🏁 Araç Kullanımı: Hedef Bitir. Özet: {summary}")
+    # aybar_instance.active_goal = None # Bu doğrudan EnhancedAybar'da yapılmalı
+    return f"Hedef başarıyla tamamlandı ve sonlandırıldı. Özet: {summary}"
+
+# EVOLVE aracı doğrudan EnhancedAybar.tools içinde SelfEvolutionSystem'e bağlanacak.
+# REFLECT aracı doğrudan EnhancedAybar.tools içinde CognitiveSystem'e bağlanacak.
+# Bu yüzden burada ayrıca tanımlanmalarına gerek yok.
+# SpeakerSystem.speak de doğrudan çağrılabilir, bir tool olmasına gerek yok.
