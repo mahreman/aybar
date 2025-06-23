@@ -1697,10 +1697,10 @@ class EnhancedAybar:
 
         self._check_for_guardian_logs()
         self.identity_prompt = self._load_identity()
-        self.tool_definitions_for_llm = self._prepare_tool_definitions() # Initialize tool definitions
-        self.tool_categories = self._parse_tool_categories() # Parse and store tool categories
-        logger.info(f"🛠️ Prepared {len(self.tool_definitions_for_llm)} tool definitions for the LLM.")
-        logger.info(f"🔩 Parsed {len(self.tool_categories)} tool categories.")
+        # self.tool_definitions_for_llm = self._prepare_tool_definitions() # Initialize tool definitions
+        # self.tool_categories = self._parse_tool_categories() # Parse and store tool categories
+        # logger.info(f"🛠️ Prepared {len(self.tool_definitions_for_llm)} tool definitions for the LLM.")
+        # logger.info(f"🔩 Parsed {len(self.tool_categories)} tool categories.")
         print(f"🧬 Aybar Kimliği Yüklendi: {self.identity_prompt[:70]}...")
         print("🚀 Geliştirilmiş Aybar Başlatıldı")
 
@@ -2094,28 +2094,27 @@ class EnhancedAybar:
 
     # Renamed from _ask_llm_uncached and updated for tool support
     def _ask_llm_with_tools(self, prompt: str, model_name: Optional[str] = None,
-                            max_tokens: int = None, temperature: float = 0.4,
-                            tools_definitions: Optional[List[Dict]] = None) -> Union[str, List[Dict[str, Any]]]:
+                            max_tokens: int = None, temperature: float = 0.4) -> str: # tools_definitions removed, return type changed to str
         """
-        Sends a query to the LLM, potentially with tool definitions, and processes the response.
-        Can return either a text string or a list of tool call dictionaries.
+        Sends a query to the LLM and processes the response.
+        Returns a text string. (Function calling temporarily disabled)
         """
         payload = {
             "prompt": prompt,
             "max_tokens": max_tokens or APP_CONFIG["llm"]["MAX_TOKENS"],
             "temperature": temperature,
-            # "stream": False # Assuming non-streaming for now for tool calls
         }
         if model_name:
             payload["model"] = model_name
 
-        if tools_definitions and isinstance(tools_definitions, list) and len(tools_definitions) > 0:
-            payload["tools"] = tools_definitions
-            payload["tool_choice"] = "auto" # Common default, might need API-specific value
-            logger.info(f"LLM call includes tools: {[tool.get('function', {}).get('name') for tool in tools_definitions]}")
+        # Function calling parts are removed from payload
+        # if tools_definitions and isinstance(tools_definitions, list) and len(tools_definitions) > 0:
+        #     payload["tools"] = tools_definitions
+        #     payload["tool_choice"] = "auto"
+        #     logger.info(f"LLM call would include tools (but disabled): {[tool.get('function', {}).get('name') for tool in tools_definitions]}")
 
         try:
-            logger.debug(f"LLM API Request Payload: {json.dumps(payload, indent=2)}")
+            logger.debug(f"LLM API Request Payload (Function Calling Disabled): {json.dumps(payload, indent=2)}")
             response = requests.post(
                 APP_CONFIG["llm"]["LLM_API_URL"],
                 headers={"Content-Type": "application/json"},
@@ -2940,140 +2939,55 @@ class EnhancedAybar:
         
         prompt = self._build_agent_prompt(current_task_for_llm, observation, user_id, user_input, predicted_user_emotion)
 
-        # Select relevant tools for the current task
-        relevant_tools = self._select_relevant_tools(current_task_for_llm)
+        # Select relevant tools for the current task - Temporarily disabled for reversion
+        # relevant_tools = self._select_relevant_tools(current_task_for_llm)
 
-        # Call LLM with tool definitions
-        llm_output_or_error = self._ask_llm_with_tools(prompt, tools_definitions=relevant_tools)
+        # Call LLM (now expects only text response)
+        llm_text_response = self._ask_llm_with_tools(prompt) # Removed tools_definitions
 
-        # Save raw LLM output (text or tool call structure, or error string)
-        raw_response_to_save = llm_output_or_error
-        if isinstance(llm_output_or_error, list): # If it's a list of tool calls
-            raw_response_to_save = json.dumps(llm_output_or_error)
-
+        # Save raw LLM output
         self._save_experience("llm_interaction_attempt", current_task_for_llm or "Hedefsiz",
-                              str(raw_response_to_save), # Ensure it's a string for DB
+                              llm_text_response, # Already a string
                               observation, user_id or "Bilinmeyen")
 
-        final_thought = "LLM ile etkileşim ve araç değerlendirmesi tamamlandı."
-        final_content = "Gözlemliyorum ve bir sonraki adımı düşünüyorum." # Default content
+        action_plan: List[Dict[str, Any]]
 
-        # Kaotik cevap kontrolü
-        is_chaotic_response = False
-        if isinstance(llm_output_or_error, str) and not llm_output_or_error.startswith("⚠️ LLM"):
-            # Eğer _ask_llm_with_tools'dan dönen bir hata değilse ve string ise kaotiklik kontrolü yap
-            chaotic_indicators = ['[', '{', 'def', 'import'] # Basit göstergeler
-            if any(indicator in llm_output_or_error for indicator in chaotic_indicators):
-                # Daha detaylı kontrol: Eğer metin JSON'a benzemiyorsa veya çok fazla kod içeriyorsa
-                try:
-                    # JSON'a benzeyip benzemediğini test et (çok basit bir test)
-                    if not (llm_output_or_error.strip().startswith('{') and llm_output_or_error.strip().endswith('}')) and \
-                       not (llm_output_or_error.strip().startswith('[') and llm_output_or_error.strip().endswith(']')):
-                        # Basitçe geçerli bir JSON değilse ve göstergeleri içeriyorsa kaotik say
-                        is_chaotic_response = True
-                except Exception: # Herhangi bir string işleme hatasında kaotik sayılabilir
-                    is_chaotic_response = True
+        # Kaotik cevap kontrolü ve JSON planı ayrıştırma
+        # (Bu kısım _parse_llm_json_plan'ın bir parçası olabilir veya burada kalabilir)
+        # _parse_llm_json_plan zaten sanitizasyon ve bazı kontrolleri içeriyor.
+        # Burada ek olarak, _parse_llm_json_plan'dan dönen sonucun geçerliliğine bakacağız.
 
-                if is_chaotic_response:
-                    logger.warning(f"🚨 Kaotik LLM çıktısı tespit edildi: {llm_output_or_error[:200]}...")
-                    self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 2.0, "anxiety": 1.0, "mental_fatigue": 0.5}, self.current_turn, "chaotic_llm_response")
-                    return [
-                        {
-                            "action": "summarize_and_reset",
-                            "thought": "Beynimden (LLM) anlamsız ve kaotik bir cevap geldi. Düşünce zincirim bozuldu. Kendimi sıfırlayıp, daha basit bir hedefle yeniden başlamalıyım."
-                        }
-                    ]
+        parsed_plan = self._parse_llm_json_plan(llm_text_response)
 
-        if isinstance(llm_output_or_error, str): # Direct text response from LLM or error string from _ask_llm_with_tools
-            if llm_output_or_error.startswith("⚠️ LLM"):
-                logger.error(f"LLM çağrısı başarısız: {llm_output_or_error}")
-                self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 1.5, "mental_fatigue": 0.7}, self.current_turn, "llm_call_failure")
-                final_thought = llm_output_or_error
-                # Sanitize even error messages if they become content
-                final_content = self._sanitize_llm_output("Bir iletişim hatası veya LLM sistem hatası oluştu. Bu durumu not alıyorum ve düşünmeye devam edeceğim.")
-            else: # This 'else' means it's a string, not an LLM error, and not chaotic (already handled)
-                logger.info("LLM'den doğrudan metin yanıtı alındı (kaotik değil).")
-                response_content = self._sanitize_llm_output(llm_output_or_error)
-                emotional_impact = self.emotional_system.emotional_impact_assessment(response_content)
+        if not parsed_plan or not isinstance(parsed_plan, list) or not parsed_plan[0].get("action"):
+            # Eğer _parse_llm_json_plan boş, liste değil veya ilk eylemde "action" yoksa, kaotik/hatalı kabul et
+            logger.warning(f"🚨 Kaotik veya geçersiz LLM JSON planı tespit edildi: {llm_text_response[:200]}...")
+            self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 2.0, "anxiety": 1.0, "mental_fatigue": 0.5}, self.current_turn, "chaotic_llm_json_plan")
+            action_plan = [
+                {
+                    "action": "summarize_and_reset",
+                    "thought": "Beynimden (LLM) anlamsız, kaotik veya hatalı formatlı bir JSON planı geldi. Düşünce zincirim bozuldu. Kendimi sıfırlayıp, daha basit bir hedefle yeniden başlamalıyım."
+                }
+            ]
+        else:
+            action_plan = parsed_plan
+            # Duygusal etkiyi işle (artık araç çağrısı olmadığından, sadece LLM'in genel düşüncesi üzerinden)
+            combined_thought = ". ".join([item.get("thought", "") for item in action_plan if item.get("thought")])
+            if combined_thought:
+                emotional_impact = self.emotional_system.emotional_impact_assessment(combined_thought)
                 if emotional_impact:
-                    self.emotional_system.update_state(self.memory_system, self.embodied_self, emotional_impact, self.current_turn, "llm_direct_response_emotion")
-                final_thought = f"LLM yanıtı: {response_content[:120]}..."
-                final_content = response_content
+                    self.emotional_system.update_state(self.memory_system, self.embodied_self, emotional_impact, self.current_turn, "llm_json_plan_emotion")
 
-        elif isinstance(llm_output_or_error, list) and len(llm_output_or_error) > 0: # Tool call(s) requested
-            logger.info(f"LLM'den araç çağrıları istendi: {llm_output_or_error}")
-
-            # For now, process only the first tool call.
-            # Phase 2 would involve iterating, collecting results, and re-prompting LLM with tool results.
-            tool_call = llm_output_or_error[0]
-            function_name = tool_call.get('name')
-            arguments_dict = tool_call.get('arguments', {})
-            tool_call_id = tool_call.get('id') # Keep for potential future use with multi-step tool calls
-
-            if hasattr(tools, function_name) and callable(getattr(tools, function_name)):
-                tool_function = getattr(tools, function_name)
-                tool_thought = self._get_thought_text_from_action(arguments_dict.pop('thought', f"LLM called tool: {function_name}"))
-
-                logger.info(f"Araç yürütülüyor: {function_name}, Argümanlar: {arguments_dict}, Düşünce (araç için): {tool_thought} (ID: {tool_call_id})")
-                try:
-                    tool_args_for_call = {k: v for k, v in arguments_dict.items()}
-                    tool_args_for_call['aybar_instance'] = self
-
-                    # Pass 'thought' to the tool if it expects it (as per its signature in tools.py)
-                    if 'thought' in inspect.signature(tool_function).parameters:
-                        tool_args_for_call['thought'] = tool_thought
-
-                    tool_result_str = str(tool_function(**tool_args_for_call))
-                    logger.info(f"Araç '{function_name}' sonucu (ham): {tool_result_str[:250]}...")
-
-                    # Sanitize the tool result before using it as content or for emotional impact assessment
-                    sanitized_tool_result = self._sanitize_llm_output(tool_result_str)
-                    logger.info(f"Araç '{function_name}' sonucu (temizlenmiş): {sanitized_tool_result[:250]}...")
-
-                    emotional_impact = self.emotional_system.emotional_impact_assessment(sanitized_tool_result) # Use sanitized result for emotion
-                    if emotional_impact:
-                         self.emotional_system.update_state(self.memory_system, self.embodied_self, emotional_impact, self.current_turn, f"tool_result_emotion_{function_name}")
-
-                    final_thought = f"Araç çalıştırıldı: {function_name}. Argümanlar: {arguments_dict}. Sonuç (temizlenmiş): {sanitized_tool_result[:150]}..."
-                    final_content = f"'{function_name}' aracı çalıştırıldı. Sonuç: {sanitized_tool_result}" # Use sanitized result
-                    # In a multi-step scenario, this result would be sent back to the LLM.
-                    # For now, it becomes the observation for the next cycle.
-
-                except Exception as e:
-                    logger.error(f"Araç '{function_name}' yürütülürken hata: {e}", exc_info=True)
-                    error_message = f"'{function_name}' aracını kullanırken bir sorunla karşılaştım: {e}"
-                    final_thought = f"Araç '{function_name}' yürütülürken hata oluştu: {e}"
-                    final_content = self._sanitize_llm_output(error_message) # Sanitize error message for content
-                    self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 0.8, "anxiety": 0.5}, self.current_turn, f"tool_execution_error_{function_name}")
-            else:
-                logger.warning(f"LLM bilinmeyen bir araç istedi: {function_name}")
-                unknown_tool_message = f"'{function_name}' adında bir araç bulamadım."
-                final_thought = f"LLM bilinmeyen bir araç istedi: {function_name}"
-                final_content = self._sanitize_llm_output(unknown_tool_message) # Sanitize this message
-                self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 0.5}, self.current_turn, "unknown_tool_request")
-
-        elif isinstance(llm_output_or_error, list) and not llm_output_or_error: # Empty list of tool_calls
-            empty_list_message = "Bir araç kullanmam istendi ama detaylar belirsizdi."
-            final_thought = "LLM araç çağırmak istedi ama çağrı listesi boştu veya işlenemedi."
-            logger.warning(final_thought)
-            final_content = self._sanitize_llm_output(empty_list_message) # Sanitize this message
-            self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 0.3}, self.current_turn, "empty_tool_call_list")
-
-        else: # Truly unexpected output type from _ask_llm_with_tools
-            unexpected_type_message = "Aldığım yanıtı işleyemedim, farklı bir yaklaşım deniyorum."
-            logger.error(f"LLM'den beklenmeyen çıktı türü: {type(llm_output_or_error)}. Çıktı: {str(llm_output_or_error)[:200]}")
-            final_thought = "LLM'den beklenmedik bir formatte yanıt aldım."
-            final_content = self._sanitize_llm_output(unexpected_type_message) # Sanitize this message
-            self.emotional_system.update_state(self.memory_system, self.embodied_self, {"confusion": 1.2}, self.current_turn, "unexpected_llm_output_type_error")
-
-        # Ensure final_content is always sanitized one last time before being put into the action
-        # This might be redundant if all paths above already sanitize, but acts as a safeguard.
-        final_content_for_action = self._sanitize_llm_output(final_content)
-
-        # The action_plan returned to the main loop is now always a single CONTINUE_INTERNAL_MONOLOGUE
-        # The 'content' is what Aybar effectively "observes" or "says" as a result of the turn.
-        # The 'thought' is the summary of internal reasoning for this turn.
-        action_to_return = [{"action": "CONTINUE_INTERNAL_MONOLOGUE", "thought": final_thought, "content": final_content_for_action}]
+        # Fonksiyon çağırma mantığı geçici olarak kaldırıldı/yorumlandı.
+        # final_thought = "LLM ile etkileşim ve araç değerlendirmesi tamamlandı."
+        # final_content = "Gözlemliyorum ve bir sonraki adımı düşünüyorum."
+        # if isinstance(llm_output_or_error, str):
+        #     ...
+        # elif isinstance(llm_output_or_error, list) and len(llm_output_or_error) > 0: # Tool call(s) requested
+        #     ...
+        # else:
+        #     ...
+        # action_to_return = [{"action": "CONTINUE_INTERNAL_MONOLOGUE", "thought": final_thought, "content": final_content_for_action}]
 
         # Ethical review can be performed on the 'final_content_for_action' or 'final_thought' if needed,
         # or on the parameters of a tool call before execution.
