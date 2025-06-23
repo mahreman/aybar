@@ -2996,7 +2996,7 @@ class EnhancedAybar:
         # If it's a direct text response (final_content), it can be reviewed here.
         # This part is simplified for now. A full ethical review needs careful placement.
 
-        return action_to_return
+        return action_plan
 
 
     # run_enhanced_cycle metodunun tamamını bu yeni "Beyin" versiyonuyla değiştirin
